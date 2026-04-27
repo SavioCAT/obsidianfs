@@ -40,7 +40,8 @@ struct inode *obsidianfs_get_inode(struct super_block *sb, const struct inode *d
         return NULL;
 
     inode->i_ino            = get_next_ino();
-    inode->i_mapping->a_ops = &ram_aops;
+    inode->i_mapping->a_ops = &empty_aops;
+    inode->i_mode	    = mode;
     simple_inode_init_ts(inode);
 
     switch (mode & S_IFMT) { //Binary mask to isolate type bits from permission bits
@@ -131,7 +132,7 @@ static struct file_system_type obsidianfs_type = {
     .owner           = THIS_MODULE,
     .name            = "obsidianfs",
     .init_fs_context = obsidianfs_init_fs_context,
-    .kill_sb         = kill_litter_super,
+    .kill_sb         = kill_anon_super,
 };
 
 //Registration of the file system
