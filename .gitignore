@@ -1,0 +1,6 @@
+*.o
+modules.order
+Module.symvers
+obsidianfs.ko
+obsidianfs.mod  
+obsidianfs.mod.c  
