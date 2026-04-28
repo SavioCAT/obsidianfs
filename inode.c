@@ -17,6 +17,7 @@ static int obsidianfs_create(struct mnt_idmap *, struct inode *, struct dentry *
 static struct dentry *obsidianfs_mkdir(struct mnt_idmap *, struct inode *, struct dentry *, umode_t);
 static int obsidianfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, const char *symname)
 {
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
     return page_symlink(dir, symname, strlen(symname) + 1);
 }
 
@@ -36,9 +37,10 @@ static const struct inode_operations obsidianfs_dir_inode_ops = {
 //Inode allocation
 struct inode *obsidianfs_get_inode(struct super_block *sb, const struct inode *dir, umode_t mode, dev_t dev) {
     struct inode *inode = new_inode(sb);
-    if (!inode)
-        return NULL;
-
+    if (!inode) {
+        pr_err("[ERROR OBSIDIANFS] error while calling %s\n", __func__);
+	return NULL;
+    }
     inode->i_ino            = get_next_ino();
     inode->i_mapping->a_ops = &empty_aops;
     inode->i_mode	    = mode;
@@ -62,22 +64,26 @@ struct inode *obsidianfs_get_inode(struct super_block *sb, const struct inode *d
         init_special_inode(inode, mode, dev);
         break;
     }
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
     return inode;
 }
 
 // Creation of file/directory
 static int obsidianfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, dev_t dev) {
     struct inode *inode = obsidianfs_get_inode(dir->i_sb, dir, mode, dev);
-    if (!inode)
+    if (!inode){
+        pr_err("[ERROR OBSIDIANFS] error while calling %s\n", __func__);
         return -ENOSPC;
-
+    }
     d_instantiate(dentry, inode);
     dget(dentry);
     inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir));
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
     return 0;
 }
 
 static int obsidianfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl) {
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
     return obsidianfs_mknod(idmap, dir, dentry, mode | S_IFREG, 0);
 }
 
@@ -103,18 +109,24 @@ static int obsidianfs_fill_super(struct super_block *sb, struct fs_context *fc) 
     sb->s_maxbytes       = MAX_LFS_FILESIZE;
 
     root = obsidianfs_get_inode(sb, NULL, S_IFDIR | 0755, 0);
-    if (!root)
+    if (!root){
+        pr_err("[ERROR OBSIDIANFS] error while calling %s\n", __func__);
         return -ENOMEM;
+    }
 
     sb->s_root = d_make_root(root);
-    if (!sb->s_root)
+    if (!sb->s_root){
+        pr_err("[ERROR OBSIDIANFS] error while calling %s\n", __func__);
         return -ENOMEM;
+    }
 
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
     return 0;
 }
 
 static int obsidianfs_get_tree(struct fs_context *fc)
 {
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
     return get_tree_nodev(fc, obsidianfs_fill_super);
 }
 
@@ -125,6 +137,7 @@ static const struct fs_context_operations obsidianfs_context_ops = {
 static int obsidianfs_init_fs_context(struct fs_context *fc)
 {
     fc->ops = &obsidianfs_context_ops;
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
     return 0;
 }
 
@@ -137,11 +150,13 @@ static struct file_system_type obsidianfs_type = {
 
 //Registration of the file system
 static int __init obsidianfs_init(void) {
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
     return register_filesystem(&obsidianfs_type);
 }
 
 //Unregister the file system
 static void __exit obsidianfs_exit(void) {
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
     unregister_filesystem(&obsidianfs_type);
 }
 
