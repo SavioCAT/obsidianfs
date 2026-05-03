@@ -5,6 +5,8 @@
 #include <linux/fs_context.h>
 #include <linux/string.h>
 #include "ramobsidianfs.h"
+#include <linux/ramfs.h>
+#include <linux/slab.h>
 
 static const struct inode_operations obsidianfs_file_inode_ops = {
     .setattr = simple_setattr,
@@ -15,6 +17,7 @@ static const struct inode_operations obsidianfs_file_inode_ops = {
 static int obsidianfs_mknod(struct mnt_idmap *, struct inode *, struct dentry *, umode_t, dev_t);
 static int obsidianfs_create(struct mnt_idmap *, struct inode *, struct dentry *, umode_t, bool);
 static struct dentry *obsidianfs_mkdir(struct mnt_idmap *, struct inode *, struct dentry *, umode_t);
+static struct kmem_cache *obsidianfs_inode_cache;
 static int obsidianfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, const char *symname)
 {
     pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
@@ -34,6 +37,16 @@ static const struct inode_operations obsidianfs_dir_inode_ops = {
     .rename  = simple_rename, // Function pointer for renaming a file
 };
 
+/* WIP
+ *
+static const struct address_space_operations obsidianfs_aops = {
+    .read_folio      = ramfs_read_folio,   // Read page RAM
+    .write_begin     = ramfs_write_begin,  // prepare reading
+    .write_end       = ramfs_write_end,    // finish reading
+    .dirty_folio     = filemap_dirty_folio, // Tag modified 
+};
+*/
+
 //Inode allocation
 struct inode *obsidianfs_get_inode(struct super_block *sb, const struct inode *dir, umode_t mode, dev_t dev) {
     struct inode *inode = new_inode(sb);
@@ -41,8 +54,11 @@ struct inode *obsidianfs_get_inode(struct super_block *sb, const struct inode *d
         pr_err("[ERROR OBSIDIANFS] error while calling %s\n", __func__);
 	return NULL;
     }
+    struct obsidianfs_inode_meta *obsidian_inode;
+    obsidian_inode = OBSIDIANFS_INODE(inode);
+    obsidian_inode->flags = 123; 
     inode->i_ino            = get_next_ino();
-    inode->i_mapping->a_ops = &empty_aops;
+    inode->i_mapping->a_ops = &ram_aops;
     inode->i_mode	    = mode;
     simple_inode_init_ts(inode);
 
@@ -94,9 +110,23 @@ static struct dentry *obsidianfs_mkdir(struct mnt_idmap *idmap, struct inode *di
     return NULL;
 }
 
+static struct inode *obsidianfs_alloc_inode(struct super_block *sb) {
+    struct obsidianfs_inode_meta *oi;
+    oi = kmem_cache_alloc(obsidianfs_inode_cache, GFP_KERNEL);
+    if (!oi)
+        return NULL;
+    return &oi->vfs_inode;
+}
+
+static void obsidianfs_free_inode(struct inode *inode) {
+    kmem_cache_free(obsidianfs_inode_cache, OBSIDIANFS_INODE(inode));
+}
+
 // Super block operation
 static const struct super_operations obsidianfs_sb_ops = {
     .statfs     = simple_statfs,
+    .alloc_inode = obsidianfs_alloc_inode,
+    .free_inode = obsidianfs_free_inode,
 };
 
 static int obsidianfs_fill_super(struct super_block *sb, struct fs_context *fc) {
@@ -151,12 +181,17 @@ static struct file_system_type obsidianfs_type = {
 //Registration of the file system
 static int __init obsidianfs_init(void) {
     pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
+    obsidianfs_inode_cache = kmem_cache_create("obsidian_inode_cache", sizeof(struct obsidianfs_inode_meta), 0, SLAB_RECLAIM_ACCOUNT, NULL);
+    if (!obsidianfs_inode_cache) {
+	    return -ENOMEM;
+    }
     return register_filesystem(&obsidianfs_type);
 }
 
 //Unregister the file system
 static void __exit obsidianfs_exit(void) {
     pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
+    kmem_cache_destroy(obsidianfs_inode_cache);
     unregister_filesystem(&obsidianfs_type);
 }
 

@@ -34,5 +34,4 @@ extern struct inode *obsidianfs_get_inode(struct super_block *sb, const struct i
  * obsidianfs_aops	: interaction with the page cache (readpage, writepage…) used by the kernel for page-based read/write operations
  */
 extern const struct file_operations obsidianfs_file_ops;
-extern const struct address_space_operations ram_aops;
 #endif
