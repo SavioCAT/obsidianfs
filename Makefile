@@ -1,5 +1,5 @@
 # Object files to compile
-obsidianfs-objs := inode.o file.o
+obsidianfs-objs := inode.o file.o pageops.o
 
 # Tell the kernel build system to build our module
 obj-m += obsidianfs.o
@@ -16,14 +16,9 @@ clean:
 # Quick test commands (run as root)
 load:
 	sudo insmod obsidianfs.ko
-	sudo mkdir -p /mnt/obsidian
-	sudo mount -t obsidianfs none /mnt/obsidian
+	sudo mkdir -p /tmp/obsidian
+	sudo mount -t obsidianfs none /tmp/obsidian
 
 unload:
-	sudo umount /mnt/obsidian
+	sudo umount /tmp/obsidian
 	sudo rmmod obsidianfs
-
-test: load
-	echo "hello obsidianfs" | sudo tee /mnt/obsidian/test.txt
-	cat /mnt/obsidian/test.txt
-	ls -lai /mnt/obsidian/

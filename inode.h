@@ -1,5 +1,5 @@
-#ifndef OBSIDIANFS_H
-#define OBSIDIANFS_H
+#ifndef INODEOBSIDIANFS_H
+#define INODEOBSIDIANFS_H
 
 #include <linux/fs.h>
 #include <linux/pagemap.h>
@@ -20,7 +20,6 @@ static inline struct obsidianfs_inode_meta *OBSIDIANFS_INODE(struct inode *inode
 }
 
 /*
- * Declared in inode.c, Allocate and initiate a new inode
  * sb 	: superblock to which the inode must be attached
  * dir 	: the parent inode (directory containing the new inode), can be NULL
  * mode : type + permission, for exemple 0644 for a regular file
@@ -28,10 +27,4 @@ static inline struct obsidianfs_inode_meta *OBSIDIANFS_INODE(struct inode *inode
  */
 extern struct inode *obsidianfs_get_inode(struct super_block *sb, const struct inode *dir, umode_t mode, dev_t dev);
 
-/*
- * Declared in file.c, used in inode.c while creating an inode (inode->i_fop = &obsidianfs_file_ops)
- * obsidianfs_file_ops	: open, read, write, llseek… on regular files
- * obsidianfs_aops	: interaction with the page cache (readpage, writepage…) used by the kernel for page-based read/write operations
- */
-extern const struct file_operations obsidianfs_file_ops;
 #endif
