@@ -3,12 +3,14 @@
 
 #include <linux/fs.h>
 #include <linux/pagemap.h>
+#include <linux/mm.h>
+#include <linux/err.h>
 
 #define OBSIDIAN_MAGIC 0x6C854200
 
 struct obsidianfs_inode_meta {
 	struct	inode vfs_inode; // VFS inode structure
-	u32	flags; // Value to contain flags if needed
+	bool	flagsProtected;
 	/* 
 	 * Can add value if more metadata value is needed in the future
 	 * vfs_inode MUST BE the first value in the structure

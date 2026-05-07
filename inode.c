@@ -12,6 +12,8 @@
 #include <linux/ramfs.h>
 //#include <linux/libfs.h>
 #include <linux/slab.h>
+#include <linux/mm.h>
+#include <linux/err.h>
 
 static int obsidianfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl);
 static struct inode *obsidianfs_alloc_inode(struct super_block *sb);
@@ -20,6 +22,8 @@ static int obsidianfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct
 static int obsidianfs_fill_super(struct super_block *sb, struct fs_context *fc);
 static int obsidianfs_get_tree(struct fs_context *fc);
 static int obsidianfs_init_fs_context(struct fs_context *fc);
+static int obsidianfs_hardlink(struct dentry *old_dentry, struct inode *dir, struct dentry *dentry);
+static int obsidianfs_unlink(struct inode *dir, struct dentry *dentry);
 
 static const struct inode_operations obsidianfs_file_inode_ops = {
     .setattr = simple_setattr,
@@ -36,8 +40,8 @@ static const struct super_operations obsidianfs_sb_ops = {
 static const struct inode_operations obsidianfs_dir_inode_ops = {
     .create  = obsidianfs_create, // Function pointer to create a simple file
     .lookup  = simple_lookup, // Function pointer for file name resolution 
-    .link    = simple_link, // Function pointer for physical link creation (ln src dst)
-    .unlink  = simple_unlink, // Function pointer for physical link deletion
+    .link    = obsidianfs_hardlink, // Function pointer for physical link creation (ln src dst)
+    .unlink  = obsidianfs_unlink, // Function pointer for physical link deletion
     .symlink = obsidianfs_symlink, // Function pointer for symbolic link creation (ln -s)
     .mkdir   = obsidianfs_mkdir, // Function pointer for directory creation
     .rmdir   = simple_rmdir, // Function pointer for directory deletion
@@ -75,7 +79,7 @@ struct inode *obsidianfs_get_inode(struct super_block *sb, const struct inode *d
     }
     struct obsidianfs_inode_meta *obsidian_inode;
     obsidian_inode = OBSIDIANFS_INODE(inode);
-    obsidian_inode->flags = 123; // TO MODIFY (OR NOT TO MODIFY, THAT IS THE QUESTION)
+    obsidian_inode->flagsProtected = false; //
     inode->i_ino            = get_next_ino();
     inode->i_mapping->a_ops = &obsidianfs_page_ops;
     inode->i_mode	    = mode;
@@ -113,6 +117,20 @@ static void obsidianfs_free_inode(struct inode *inode) {
     pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
 }
 
+static int obsidianfs_hardlink(struct dentry *old_dentry, struct inode *dir, struct dentry *dentry)
+{
+	struct inode *inode = d_inode(old_dentry); // Get the inode associated with the dentry
+
+	inode_set_mtime_to_ts(dir, inode_set_ctime_to_ts(dir, inode_set_ctime_current(inode)));
+	inc_nlink(inode);
+	igrab(inode);
+	d_make_persistent(dentry, inode);
+    mark_inode_dirty(dir);
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
+    pr_info("[INFO OBSIDIANFS] count of hardlink = %u\n", inode->i_nlink);
+	return 0;
+}
+
 static int obsidianfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, const char *symname) {
     pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
     struct inode *inode = obsidianfs_get_inode(dir->i_sb, dir, S_IFLNK | 0700, 0);
@@ -130,7 +148,17 @@ static int obsidianfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct
 
     d_instantiate(dentry, inode); // Associate the dentry with the inode
     dget(dentry); // Increment the reference count of the dentry
-    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
+    return 0;
+}
+
+static int obsidianfs_unlink(struct inode *dir, struct dentry *dentry) {
+    struct inode *inode = d_inode(dentry);
+    inode_set_mtime_to_ts(dir, inode_set_ctime_to_ts(dir, inode_set_ctime_current(inode)));
+    drop_nlink(inode);
+    mark_inode_dirty(inode);
+    mark_inode_dirty(dir);
+    d_make_discardable(dentry);
+
     return 0;
 }
 
@@ -172,9 +200,15 @@ static int obsidianfs_init_fs_context(struct fs_context *fc)
     return 0;
 }
 
+static void obsidianfs_i_init_once(void *foo)
+{
+    struct obsidianfs_inode_meta *oi = foo;
+    inode_init_once(&oi->vfs_inode);
+}
+
 //Registration of the file system
 static int __init obsidianfs_init(void) {
-    obsidianfs_inode_cache = kmem_cache_create("obsidian_inode_cache", sizeof(struct obsidianfs_inode_meta), 0, SLAB_RECLAIM_ACCOUNT, NULL);
+    obsidianfs_inode_cache = kmem_cache_create("obsidian_inode_cache", sizeof(struct obsidianfs_inode_meta), 0, SLAB_RECLAIM_ACCOUNT, obsidianfs_i_init_once);
     if (!obsidianfs_inode_cache) {
         pr_err("[ERROR OBSIDIANFS] error while calling %s\n", __func__);
 	    return -ENOMEM;

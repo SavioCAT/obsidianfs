@@ -6,6 +6,7 @@
 #include "inode.h"
 #include "file.h"
 #include "pageops.h"
+#include "ioctlops.h"
 
 const struct address_space_operations obsidianfs_page_ops = {
     .read_folio     = obsidian_read_folio, // Function pointer for reading a page from the page cache, used by the kernel for page-based read operations, return 0 if success, negative else
@@ -25,6 +26,7 @@ int obsidianfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *
     dget(dentry); // Increment the reference count of the dentry
     inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir)); // Update the modification time and the change time of the parent directory, happen if the mknod function succeed
     pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
+    pr_info("number of hardlink link = %u\n", inode->i_nlink);
     return 0;
 }
 
@@ -44,6 +46,7 @@ const struct file_operations obsidianfs_file_ops = {
     .fsync       = noop_fsync, // Function pointer for synchronizing a file's in-core state with storage, used by the kernel for fsync system calls, return 0 if success, negative else
     .llseek      = generic_file_llseek, // Function pointer for seeking within a file, used by the kernel for lseek system calls, return the new position if success, negative else
     .splice_read = filemap_splice_read, // Function pointer for reading data from a file using splice, used by the kernel for splice system calls, return the number of bytes read if success, negative else
+    .unlocked_ioctl = obsidianfs_ioctl,
 };
 
 
