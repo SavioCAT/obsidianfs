@@ -23,7 +23,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    ret = ioctl(fd, OBSIDIAN_TEST);
+    ret = ioctl(fd, OBSIDIAN_IOC_PROTECT);
     if (ret < 0) {
         fprintf(stderr, "Error ioctl: %s\n", strerror(errno));
         close(fd);

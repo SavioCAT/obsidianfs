@@ -24,9 +24,10 @@ static int obsidianfs_get_tree(struct fs_context *fc);
 static int obsidianfs_init_fs_context(struct fs_context *fc);
 static int obsidianfs_hardlink(struct dentry *old_dentry, struct inode *dir, struct dentry *dentry);
 static int obsidianfs_unlink(struct inode *dir, struct dentry *dentry);
+static int obsidian_setattr(struct mnt_idmap *idmap, struct dentry *dentry, struct iattr *iattr);
 
 static const struct inode_operations obsidianfs_file_inode_ops = {
-    .setattr = simple_setattr,
+    .setattr = obsidian_setattr,
     .getattr = simple_getattr,
 };
 
@@ -61,6 +62,29 @@ static const struct fs_context_operations obsidianfs_context_ops = {
 };
 
 static struct kmem_cache *obsidianfs_inode_cache;
+
+static int obsidian_setattr(struct mnt_idmap *idmap, struct dentry *dentry, struct iattr *iattr)
+{
+	struct inode *inode = d_inode(dentry);
+	int error;
+
+    struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
+
+    if (oi->flagsProtected) {
+        pr_err("[ERROR OBSIDIANFS] error while calling %s: file is protected\n", __func__);
+        return -EPERM;
+    }
+
+	error = setattr_prepare(idmap, dentry, iattr);
+	if (error)
+		return error;
+
+	if (iattr->ia_valid & ATTR_SIZE)
+		truncate_setsize(inode, iattr->ia_size);
+	setattr_copy(idmap, inode, iattr);
+	mark_inode_dirty(inode);
+	return 0;
+}
 
 static struct inode *obsidianfs_alloc_inode(struct super_block *sb) {
     struct obsidianfs_inode_meta *oi;
@@ -153,12 +177,18 @@ static int obsidianfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct
 
 static int obsidianfs_unlink(struct inode *dir, struct dentry *dentry) {
     struct inode *inode = d_inode(dentry);
+    struct obsidianfs_inode_meta *obsidian_inode = OBSIDIANFS_INODE(inode);
+    if (obsidian_inode->flagsProtected) {
+        pr_err("[ERROR OBSIDIANFS] error while calling %s: file is protected\n", __func__);
+        return -EPERM;
+    }
     inode_set_mtime_to_ts(dir, inode_set_ctime_to_ts(dir, inode_set_ctime_current(inode)));
     drop_nlink(inode);
+    if (S_ISDIR(d_inode(dentry)->i_mode)) {
+        drop_nlink(inode); // If the file is a directory, we need to drop the link count twice: once for the directory itself and once for the parent directory's link to it
+    }
     mark_inode_dirty(inode);
     mark_inode_dirty(dir);
-    d_make_discardable(dentry);
-
     return 0;
 }
 

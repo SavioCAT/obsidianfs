@@ -39,42 +39,44 @@ struct dentry *obsidianfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, stru
     return NULL;
 }
 
+/*
+Modify this function to implement CoW
+when writing, rather than writing in the original file, create a new one, a new inode, and write to this one.
+Modify the custom inode to add a reference to the last inode.
+When 
+*/
+static ssize_t obsidian_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = file->f_mapping->host;
+    struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
+	ssize_t ret;
+
+    if (oi->flagsProtected) {
+        pr_err("[ERROR OBSIDIANFS] error while calling %s: file is protected\n", __func__);
+        return -EPERM;
+    }
+
+	inode_lock(inode);
+	ret = generic_write_checks(iocb, from);
+	if (ret > 0) {
+		ret = __generic_file_write_iter(iocb, from);
+    }
+    inode_unlock(inode);
+
+	if (ret > 0) {
+		ret = generic_write_sync(iocb, ret);
+    }
+    pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
+	return ret;
+}
+
 const struct file_operations obsidianfs_file_ops = {
     .read_iter   = generic_file_read_iter, // Function pointer for reading data from a file, used by the kernel for read system calls, return the number of bytes read if success, negative else
-    .write_iter  = generic_file_write_iter, // Function pointer for writing data to a file, used by the kernel for write system calls, return the number of bytes written if success, negative else
+    .write_iter  = obsidian_write_iter, // Function pointer for writing data to a file, used by the kernel for write system calls, return the number of bytes written if success, negative else
     .mmap        = generic_file_mmap, // Function pointer for memory mapping a file, used by the kernel for mmap system calls, return 0 if success, negative else
     .fsync       = noop_fsync, // Function pointer for synchronizing a file's in-core state with storage, used by the kernel for fsync system calls, return 0 if success, negative else
     .llseek      = generic_file_llseek, // Function pointer for seeking within a file, used by the kernel for lseek system calls, return the new position if success, negative else
     .splice_read = filemap_splice_read, // Function pointer for reading data from a file using splice, used by the kernel for splice system calls, return the number of bytes read if success, negative else
     .unlocked_ioctl = obsidianfs_ioctl,
 };
-
-
-/*
-#include <linux/fs.h>
-#include <linux/mm.h>
-#include "ramobsidianfs.h"
-
-static int obsidianfs_read_folio(struct file *file, struct folio *folio)
-{
-    folio_zero_range(folio, 0, folio_size(folio));
-    folio_mark_uptodate(folio);
-    folio_unlock(folio);
-    return 0;
-}
-
-const struct address_space_operations obsidianfs_aops = {
-    .read_folio  = obsidianfs_read_folio,
-    .write_begin = simple_write_begin,
-    .write_end   = simple_write_end_nolocking,
-};
-
-const struct file_operations obsidianfs_file_ops = {
-    .read_iter   = generic_file_read_iter,
-    .write_iter  = generic_file_write_iter,
-    .mmap        = generic_file_mmap,
-    .fsync       = noop_fsync,
-    .llseek      = generic_file_llseek,
-    .splice_read = filemap_splice_read,
-};
-*/
