@@ -9,6 +9,11 @@
 extern int obsidian_read_folio (struct file *file, struct folio *folio);
 extern int obsidian_write_begin (const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned len, struct folio **foliop, void **fsdata);
 extern int obsidian_write_end (const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct folio *folio, void *fsdata);
-extern bool obsidian_dirty_folio (struct address_space *mapping, struct folio *folio);
+
+struct obsidian_chain {
+	unsigned int dir;
+	unsigned int size;
+	unsigned char flags;
+};
 
 #endif

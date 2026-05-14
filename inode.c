@@ -55,6 +55,7 @@ static struct file_system_type obsidianfs_type = {
     .name            = "obsidianfs",
     .init_fs_context = obsidianfs_init_fs_context,
     .kill_sb         = kill_anon_super,
+    .fs_flags		= FS_REQUIRES_DEV,
 };
 
 static const struct fs_context_operations obsidianfs_context_ops = {
@@ -99,11 +100,12 @@ struct inode *obsidianfs_get_inode(struct super_block *sb, const struct inode *d
     struct inode *inode = new_inode(sb);
     if (!inode) {
         pr_err("[ERROR OBSIDIANFS] error while calling %s\n", __func__);
-	return NULL;
+	    return NULL;
     }
     struct obsidianfs_inode_meta *obsidian_inode;
     obsidian_inode = OBSIDIANFS_INODE(inode);
-    obsidian_inode->flagsProtected = false; //
+    obsidian_inode->flagsProtected = false;
+    obsidian_inode->valid_size     = 0;
     inode->i_ino            = get_next_ino();
     inode->i_mapping->a_ops = &obsidianfs_page_ops;
     inode->i_mode	    = mode;
@@ -233,6 +235,7 @@ static int obsidianfs_init_fs_context(struct fs_context *fc)
 static void obsidianfs_i_init_once(void *foo)
 {
     struct obsidianfs_inode_meta *oi = foo;
+    mutex_init(&oi->i_lock);
     inode_init_once(&oi->vfs_inode);
 }
 

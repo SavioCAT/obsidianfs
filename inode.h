@@ -9,12 +9,9 @@
 #define OBSIDIAN_MAGIC 0x6C854200
 
 struct obsidianfs_inode_meta {
-	struct	inode vfs_inode; // VFS inode structure
+	struct	inode vfs_inode; /* VFS inode — MUST be first */
+	struct	mutex i_lock;    /* protects block allocation and valid_size */
 	bool	flagsProtected;
-	/* 
-	 * Can add value if more metadata value is needed in the future
-	 * vfs_inode MUST BE the first value in the structure
-	 */
 };
 
 static inline struct obsidianfs_inode_meta *OBSIDIANFS_INODE(struct inode *inode) {

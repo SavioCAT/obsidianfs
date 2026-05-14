@@ -4,15 +4,31 @@
 #include <linux/pagemap.h>
 #include <linux/mm.h>
 #include <linux/err.h>
+#include <linux/time.h>
+#include <linux/highuid.h>
+#include <linux/dax.h>
+#include <linux/blkdev.h>
+#include <linux/quotaops.h>
+#include <linux/writeback.h>
+#include <linux/buffer_head.h>
+#include <linux/mpage.h>
+#include <linux/fiemap.h>
+#include <linux/iomap.h>
+#include <linux/namei.h>
+#include <linux/uio.h>
+
+#include "inode.h"
 #include "pageops.h"
+
+int obsidian_read_folio (struct file *file, struct folio *folio);
+int obsidian_write_begin (const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned len, struct folio **foliop, void **fsdata);
+int obsidian_write_end (const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct folio *folio, void *fsdata);
+static int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create);
+static int ext2_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create);
 
 int obsidian_read_folio (struct file *file, struct folio *folio) {
     //pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
-    folio_zero_range(folio, 0, folio_size(folio)); // Zeroed the folio, have the folio pointer, the offset and the length of the range to zero for arguments.
-	flush_dcache_folio(folio); // Flush the CPU cache for the folio, no-op operation on x86 architecture but better to write this line for safety.
-	folio_mark_uptodate(folio); // Mark this folio as valid to read for the kernel.
-	folio_unlock(folio); // Unlock the folio.
-    return 0;
+    return mpage_read_folio(folio, obsidianfs_get_block);
 }
 
 int obsidian_write_begin (const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned len, struct folio **foliop, void **fsdata) {
@@ -51,20 +67,24 @@ folio : The folio that is being written to.
 */
 int obsidian_write_end (const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct folio *folio, void *fsdata) {
     //pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
-    struct inode *inode = folio->mapping->host; // get the inode associated with the folio
+    struct inode *inode = folio->mapping->host;
+    struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
     loff_t last_pos = pos + copied;
 
     if (!folio_test_uptodate(folio)) {
         if (copied < len) {
-            size_t from = offset_in_folio(folio, pos); 
-            folio_zero_range(folio, from + copied, len - copied); // Zero the remaining part of the folio that is not written, to avoid leaking data from the kernel to the user space.
+            size_t from = offset_in_folio(folio, pos);
+            folio_zero_range(folio, from + copied, len - copied);
         }
         folio_mark_uptodate(folio);
     }
 
-    if (last_pos > i_size_read(inode)) {
-        i_size_write(inode, last_pos); // Update the file size if the write operation extends beyond the current file size.
-    }
+    mutex_lock(&oi->i_lock);
+    if (last_pos > i_size_read(inode))
+        i_size_write(inode, last_pos);
+    if (last_pos > oi->valid_size)
+        oi->valid_size = last_pos;
+    mutex_unlock(&oi->i_lock);
 
     folio_mark_dirty(folio);
 	folio_unlock(folio);
@@ -73,14 +93,191 @@ int obsidian_write_end (const struct kiocb *iocb, struct address_space *mapping,
 	return copied;
 }
 
+
 /*
-return true if the folio was not already dirty and is now marked dirty
-return false if the folio was already dirty
-return false if the folio was successfully marked dirty but was dirtyed by another thread in the meantime
+Function from the ext2 file system
 */
-bool obsidian_dirty_folio (struct address_space *mapping, struct folio *folio) {
-    if (!folio_test_dirty(folio)) { // Check if the folio is already marked as dirty, if not dirty, execute the following code
-        return !folio_test_set_dirty(folio); // set the folio as dirty and return true if the folio wasnt already dirty, but if it was dirty before setting it dirty, return false.
-    }
-	return false;
+static int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create) {
+	unsigned max_blocks = bh_result->b_size >> inode->i_blkbits;
+	bool new = false;
+	bool boundary = false;
+	u32 bno;
+	int ret;
+
+	ret = obsidianfs_get_blocks(inode, iblock, max_blocks, &bno, &new, &boundary, create);
+
+	if (ret <= 0) {
+		return ret;
+	}
+	
+	map_bh(bh_result, inode->i_sb, bno); //Allow to leak the buffer to a physical block number.
+	bh_result->b_size = (ret << inode->i_blkbits);
+
+	if (new) {
+		set_buffer_new(bh_result); // Set the flag new, so the system have to zeroed the block in order to avoid any data leak
+	}
+	if (boundary) {
+		set_buffer_boundary(bh_result); // Set the flag to indicate the end of a contiguous data area. 
+	}
+
+	return 0;
+}
+
+/*
+Function from the ext2 file system
+*/
+static int ext2_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create) {
+	int err;
+	int offsets[4];
+	Indirect chain[4];
+	Indirect *partial;
+	unsigned long goal;
+	int indirect_blks;
+	int blocks_to_boundary = 0;
+	int depth;
+	struct ext2_inode_info *oi = EXT2_I(inode);
+	int count = 0;
+	unsigned long first_block = 0;
+
+	if (WARN_ON_ONCE(maxblocks == 0))
+		return -EINVAL;
+
+	depth = ext2_block_to_path(inode,iblock,offsets,&blocks_to_boundary); // A ANALYSER 
+
+	if (depth == 0)
+		return -EIO;
+
+	partial = ext2_get_branch(inode, depth, offsets, chain, &err); // A ANALYSER 
+	/* Simplest case - block found, no allocation needed */
+	if (!partial) {
+		first_block = le32_to_cpu(chain[depth - 1].key);
+		count++;
+		/*map more blocks*/
+		while (count < maxblocks && count <= blocks_to_boundary) {
+			ext2_fsblk_t blk;
+
+			if (!verify_chain(chain, chain + depth - 1)) {
+				/*
+				 * Indirect block might be removed by
+				 * truncate while we were reading it.
+				 * Handling of that case: forget what we've
+				 * got now, go to reread.
+				 */
+				err = -EAGAIN;
+				count = 0;
+				partial = chain + depth - 1;
+				break;
+			}
+			blk = le32_to_cpu(*(chain[depth-1].p + count));
+			if (blk == first_block + count)
+				count++;
+			else
+				break;
+		}
+		if (err != -EAGAIN)
+			goto got_it;
+	}
+
+	/* Next simple case - plain lookup or failed read of indirect block */
+	if (!create || err == -EIO)
+		goto cleanup;
+
+	mutex_lock(&oi->i_lock);
+	/*
+	 * If the indirect block is missing while we are reading
+	 * the chain(ext2_get_branch() returns -EAGAIN err), or
+	 * if the chain has been changed after we grab the semaphore,
+	 * (either because another process truncated this branch, or
+	 * another get_block allocated this branch) re-grab the chain to see if
+	 * the request block has been allocated or not.
+	 *
+	 * Since we already block the truncate/other get_block
+	 * at this point, we will have the current copy of the chain when we
+	 * splice the branch into the tree.
+	 */
+	if (err == -EAGAIN || !verify_chain(chain, partial)) {
+		while (partial > chain) {
+			brelse(partial->bh);
+			partial--;
+		}
+		partial = ext2_get_branch(inode, depth, offsets, chain, &err);
+		if (!partial) {
+			count++;
+			mutex_unlock(&oi->i_lock);
+			goto got_it;
+		}
+
+		if (err) {
+			mutex_unlock(&oi->i_lock);
+			goto cleanup;
+		}
+	}
+
+	/*
+	 * Okay, we need to do block allocation.  Lazily initialize the block
+	 * allocation info here if necessary
+	*/
+	if (S_ISREG(inode->i_mode) && (!ei->i_block_alloc_info)) // A MODIFIER => VOIR A QUOI CA SERT
+		ext2_init_block_alloc_info(inode);
+
+	goal = ext2_find_goal(inode, iblock, partial);
+
+	/* the number of blocks need to allocate for [d,t]indirect blocks */
+	indirect_blks = (chain + depth) - partial - 1;
+	/*
+	 * Next look up the indirect map to count the total number of
+	 * direct blocks to allocate for this branch.
+	 */
+	count = ext2_blks_to_allocate(partial, indirect_blks,
+					maxblocks, blocks_to_boundary);
+	/*
+	 * XXX ???? Block out ext2_truncate while we alter the tree
+	 */
+	err = ext2_alloc_branch(inode, indirect_blks, &count, goal,
+				offsets + (partial - chain), partial);
+
+	if (err) {
+		mutex_unlock(&oi->i_lock);
+		goto cleanup;
+	}
+
+	if (IS_DAX(inode)) {
+		/*
+		 * We must unmap blocks before zeroing so that writeback cannot
+		 * overwrite zeros with stale data from block device page cache.
+		 */
+		clean_bdev_aliases(inode->i_sb->s_bdev,
+				   le32_to_cpu(chain[depth-1].key),
+				   count);
+		/*
+		 * block must be initialised before we put it in the tree
+		 * so that it's not found by another thread before it's
+		 * initialised
+		 */
+		err = sb_issue_zeroout(inode->i_sb,
+				le32_to_cpu(chain[depth-1].key), count,
+				GFP_KERNEL);
+		if (err) {
+			mutex_unlock(&oi->i_lock);
+			goto cleanup;
+		}
+	}
+	*new = true;
+
+	ext2_splice_branch(inode, iblock, partial, indirect_blks, count);
+	mutex_unlock(&oi->i_lock);
+got_it:
+	if (count > blocks_to_boundary)
+		*boundary = true;
+	err = count;
+	/* Clean up and exit */
+	partial = chain + depth - 1;	/* the whole chain */
+cleanup:
+	while (partial > chain) {
+		brelse(partial->bh);
+		partial--;
+	}
+	if (err > 0)
+		*bno = le32_to_cpu(chain[depth-1].key);
+	return err;
 }

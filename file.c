@@ -9,10 +9,11 @@
 #include "ioctlops.h"
 
 const struct address_space_operations obsidianfs_page_ops = {
-    .read_folio     = obsidian_read_folio, // Function pointer for reading a page from the page cache, used by the kernel for page-based read operations, return 0 if success, negative else
-    .write_begin    = obsidian_write_begin, // Function pointer for preparing to write to a page in the page cache, used by the kernel for page-based write operations, return 0 if success, negative else
-    .write_end      = obsidian_write_end, // Function pointer for finishing writing to a page in the page cache, used by the kernel for page-based write operations, return 0 if success, negative else
-    .dirty_folio    = obsidian_dirty_folio, // Function pointer for marking a page in the page cache as dirty, used by the kernel for page-based write operations, return 0 if success, negative else
+    .read_folio         = obsidian_read_folio, // Function pointer for reading a page from the page cache, used by the kernel for page-based read operations, return 0 if success, negative else
+    .write_begin        = obsidian_write_begin, // Function pointer for preparing to write to a page in the page cache, used by the kernel for page-based write operations, return 0 if success, negative else
+    .write_end          = obsidian_write_end, // Function pointer for finishing writing to a page in the page cache, used by the kernel for page-based write operations, return 0 if success, negative else
+    .dirty_folio        = block_dirty_folio, // Function pointer for marking a page in the page cache as dirty, used by the kernel for page-based write operations, return 0 if success, negative else
+    .invalidate_folio   = block_invalidate_folio, // Function pointer for invalidating a page in the page cache, used by the kernel for page-based operations that require invalidating pages, return 0 if success, negative else
 };
 
 // Creation of file/directory
