@@ -11,6 +11,7 @@
 struct obsidianfs_inode_meta {
 	struct	inode vfs_inode; /* VFS inode — MUST be first */
 	struct	mutex i_lock;    /* protects block allocation and valid_size */
+	rwlock_t readwritelock;
 	bool	flagsProtected;
 };
 

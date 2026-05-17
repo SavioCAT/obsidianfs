@@ -25,6 +25,7 @@ int obsidian_write_begin (const struct kiocb *iocb, struct address_space *mappin
 int obsidian_write_end (const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct folio *folio, void *fsdata);
 static int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create);
 static int ext2_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create);
+static inline int verify_chain(Indirect *from, Indirect *to);
 
 int obsidian_read_folio (struct file *file, struct folio *folio) {
     //pr_info("[INFO OBSIDIANFS] call %s\n", __func__);
@@ -93,6 +94,13 @@ int obsidian_write_end (const struct kiocb *iocb, struct address_space *mapping,
 	return copied;
 }
 
+static inline int verify_chain(Indirect *from, Indirect *to)
+{
+	while (from <= to && from->key == *from->p)
+		from++;
+	return (from > to);
+}
+
 
 /*
 Function from the ext2 file system
@@ -126,7 +134,7 @@ static int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buf
 /*
 Function from the ext2 file system
 */
-static int ext2_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create) {
+static int obsidianfs_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create) {
 	int err;
 	int offsets[4];
 	Indirect chain[4];
@@ -135,19 +143,19 @@ static int ext2_get_blocks(struct inode *inode, sector_t iblock, unsigned long m
 	int indirect_blks;
 	int blocks_to_boundary = 0;
 	int depth;
-	struct ext2_inode_info *oi = EXT2_I(inode);
+	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
 	int count = 0;
 	unsigned long first_block = 0;
 
 	if (WARN_ON_ONCE(maxblocks == 0))
 		return -EINVAL;
 
-	depth = ext2_block_to_path(inode,iblock,offsets,&blocks_to_boundary); // A ANALYSER 
+	depth = obsidian_block_to_path(inode,iblock,offsets,&blocks_to_boundary); // A ANALYSER => DONE
 
 	if (depth == 0)
 		return -EIO;
 
-	partial = ext2_get_branch(inode, depth, offsets, chain, &err); // A ANALYSER 
+	partial = obsidianfs_get_branch(inode, depth, offsets, chain, &err); // A ANALYSER => DONE
 	/* Simplest case - block found, no allocation needed */
 	if (!partial) {
 		first_block = le32_to_cpu(chain[depth - 1].key);
@@ -200,7 +208,7 @@ static int ext2_get_blocks(struct inode *inode, sector_t iblock, unsigned long m
 			brelse(partial->bh);
 			partial--;
 		}
-		partial = ext2_get_branch(inode, depth, offsets, chain, &err);
+		partial = obsidianfs_get_branch(inode, depth, offsets, chain, &err);
 		if (!partial) {
 			count++;
 			mutex_unlock(&oi->i_lock);
@@ -218,9 +226,9 @@ static int ext2_get_blocks(struct inode *inode, sector_t iblock, unsigned long m
 	 * allocation info here if necessary
 	*/
 	if (S_ISREG(inode->i_mode) && (!ei->i_block_alloc_info)) // A MODIFIER => VOIR A QUOI CA SERT
-		ext2_init_block_alloc_info(inode);
+		obsidianfs_init_block_alloc_info(inode);
 
-	goal = ext2_find_goal(inode, iblock, partial);
+	goal = ext2_find_goal(inode, iblock, partial); // NEXT A MODIFIER
 
 	/* the number of blocks need to allocate for [d,t]indirect blocks */
 	indirect_blks = (chain + depth) - partial - 1;
@@ -280,4 +288,108 @@ cleanup:
 	if (err > 0)
 		*bno = le32_to_cpu(chain[depth-1].key);
 	return err;
+}
+
+static int obsidian_block_to_path(struct inode *inode, long i_block, int offsets[4], int *boundary)
+{
+	int ptrs = ADDR_PER_BLOCK(inode->i_sb);
+	int ptrs_bits = ADDR_PER_BLOCK_BITS(inode->i_sb);
+	const long direct_blocks = NDIR_BLOCKS,
+		indirect_blocks = ptrs,
+		double_blocks = (1 << (ptrs_bits * 2));
+	int n = 0;
+	int final = 0;
+
+	if (i_block < 0) {
+		pr_err("[ERROR OBSIDIANFS] error while calling %s\n", __func__);
+	} else if (i_block < direct_blocks) {
+		offsets[n++] = i_block;
+		final = direct_blocks;
+	} else if ( (i_block -= direct_blocks) < indirect_blocks) {
+		offsets[n++] = EXT2_IND_BLOCK;
+		offsets[n++] = i_block;
+		final = ptrs;
+	} else if ((i_block -= indirect_blocks) < double_blocks) {
+		offsets[n++] = EXT2_DIND_BLOCK;
+		offsets[n++] = i_block >> ptrs_bits;
+		offsets[n++] = i_block & (ptrs - 1);
+		final = ptrs;
+	} else if (((i_block -= double_blocks) >> (ptrs_bits * 2)) < ptrs) {
+		offsets[n++] = EXT2_TIND_BLOCK;
+		offsets[n++] = i_block >> (ptrs_bits * 2);
+		offsets[n++] = (i_block >> ptrs_bits) & (ptrs - 1);
+		offsets[n++] = i_block & (ptrs - 1);
+		final = ptrs;
+	} else {
+		pr_err("[ERROR OBSIDIANFS] error while calling %s\n", __func__);
+	}
+
+	if (boundary) {
+		*boundary = final - 1 - (i_block & (ptrs - 1));
+	}
+
+	return n;
+}
+
+static Indirect *obsidianfs_get_branch(struct inode *inode, int depth, int *offsets, Indirect chain[4], int *err)
+{
+	struct super_block *sb = inode->i_sb;
+	Indirect *p = chain;
+	struct buffer_head *bh;
+
+	*err = 0;
+	if (!p->key)
+		goto no_block;
+	while (--depth) {
+		bh = sb_bread(sb, le32_to_cpu(p->key));
+		if (!bh)
+			goto failure;
+		read_lock(&OBSIDIANFS_INODE(inode)->readwritelock);
+		if (!verify_chain(chain, p))
+			goto changed;
+		add_chain(++p, bh, (__le32*)bh->b_data + *++offsets);
+		read_unlock(&OBSIDIANFS_INODE(inode)->readwritelock);
+		if (!p->key)
+			goto no_block;
+	}
+	return NULL;
+
+changed:
+	read_unlock(&OBSIDIANFS_INODE(inode)->readwritelock);
+	brelse(bh);
+	*err = -EAGAIN;
+	goto no_block;
+failure:
+	*err = -EIO;
+no_block:
+	return p;
+}
+
+void obsidianfs_init_block_alloc_info(struct inode *inode)
+{
+	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
+	struct ext2_block_alloc_info *block_i;
+	struct super_block *sb = inode->i_sb;
+
+	block_i = kmalloc_obj(*block_i);
+	if (block_i) {
+		struct ext2_reserve_window_node *rsv = &block_i->rsv_window_node;
+
+		rsv->rsv_start = 0;
+		rsv->rsv_end = 0;
+
+	 	/*
+		 * if filesystem is mounted with NORESERVATION, the goal
+		 * reservation window size is set to zero to indicate
+		 * block reservation is off
+		 */
+		if (!test_opt(sb, RESERVATION))
+			rsv->rsv_goal_size = 0;
+		else
+			rsv->rsv_goal_size = 8;
+		rsv->rsv_alloc_hit = 0;
+		block_i->last_alloc_logical_block = 0;
+		block_i->last_alloc_physical_block = 0;
+	}
+	oi->i_block_alloc_info = block_i;
 }
