@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef INODEOBSIDIANFS_H
 #define INODEOBSIDIANFS_H
 
@@ -7,13 +6,11 @@
 #include <linux/mm.h>
 #include <linux/err.h>
 #include <linux/rbtree.h>
+#include "pageops.h"
 
 #define OBSIDIAN_MAGIC 0x6C854200
 
 typedef unsigned long obsidianfs_fsblk_t;
-
-/* forward declaration — full definition in pageops.h */
-struct obsidianfs_block_alloc_info;
 
 struct obsidianfs_inode_meta {
 	struct inode  vfs_inode;          /* VFS inode — MUST be first */
@@ -31,8 +28,6 @@ static inline struct obsidianfs_inode_meta *OBSIDIANFS_INODE(struct inode *inode
 	return container_of(inode, struct obsidianfs_inode_meta, vfs_inode);
 }
 
-extern struct inode *obsidianfs_get_inode(struct super_block *sb,
-					   const struct inode *dir,
-					   umode_t mode, dev_t dev);
+extern struct inode *obsidianfs_get_inode(struct super_block *sb, const struct inode *dir, umode_t mode, dev_t dev);
 
-#endif /* INODEOBSIDIANFS_H */
+#endif

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef PAGEOPSOBSIDIANFS_H
 #define PAGEOPSOBSIDIANFS_H
 
@@ -14,21 +13,15 @@
 #define OBSIDIAN_DIND_BLOCK  (NDIR_BLOCKS + 1)
 #define OBSIDIAN_TIND_BLOCK  (NDIR_BLOCKS + 2)
 
-#define FGP_WRITEBEGIN          (FGP_LOCK | FGP_WRITE | FGP_CREAT | FGP_STABLE)
+#define FGP_WRITEBEGIN          	(FGP_LOCK | FGP_WRITE | FGP_CREAT | FGP_STABLE)
 #define OBSIDIAN_BLOCK_SIZE(s)      ((s)->s_blocksize)
 #define ADDR_PER_BLOCK(s)           (OBSIDIAN_BLOCK_SIZE(s) / sizeof(__u32))
 #define OBSIDIAN_BLOCK_SIZE_BITS(s) ((s)->s_blocksize_bits)
 #define ADDR_PER_BLOCK_BITS(s)      (ilog2(ADDR_PER_BLOCK(s)))
 
 extern int obsidian_read_folio(struct file *file, struct folio *folio);
-extern int obsidian_write_begin(const struct kiocb *iocb,
-				struct address_space *mapping,
-				loff_t pos, unsigned len,
-				struct folio **foliop, void **fsdata);
-extern int obsidian_write_end(const struct kiocb *iocb,
-			      struct address_space *mapping,
-			      loff_t pos, unsigned int len, unsigned int copied,
-			      struct folio *folio, void *fsdata);
+extern int obsidian_write_begin(const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned len, struct folio **foliop, void **fsdata);
+extern int obsidian_write_end(const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct folio *folio, void *fsdata);
 
 typedef struct {
 	__le32             *p;
@@ -51,9 +44,9 @@ struct obsidianfs_reserve_window_node {
 struct obsidianfs_block_alloc_info {
 	struct obsidianfs_reserve_window_node rsv_window_node;
 	__u32              last_alloc_logical_block;
-	obsidianfs_fsblk_t last_alloc_physical_block;
+	unsigned long last_alloc_physical_block;
 };
 
 extern void obsidianfs_init_block_alloc_info(struct inode *inode);
 
-#endif /* PAGEOPSOBSIDIANFS_H */
+#endif
