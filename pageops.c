@@ -14,7 +14,7 @@
 #include "pageops.h"
 
 /* ------------------------------------------------------------------ */
-/* Forward declarations                                                 */
+/* Forward declarations                                               */
 /* ------------------------------------------------------------------ */
 
 static int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create);
@@ -29,7 +29,7 @@ static int obsidianfs_alloc_branch(struct inode *inode, int indirect_blks, int *
 static void obsidianfs_splice_branch(struct inode *inode, long block, Indirect *where, int num, int blks);
 
 /* ------------------------------------------------------------------ */
-/* Helpers                                                              */
+/* Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
 static inline void add_chain(Indirect *p, struct buffer_head *bh, __le32 *v)
@@ -46,7 +46,7 @@ static inline int verify_chain(Indirect *from, Indirect *to)
 }
 
 /* ------------------------------------------------------------------ */
-/* Page cache read/write                                                */
+/* Page cache read/write                                              */
 /* ------------------------------------------------------------------ */
 
 int obsidian_read_folio(struct file *file, struct folio *folio)
@@ -82,9 +82,7 @@ int obsidian_write_begin(const struct kiocb *iocb, struct address_space *mapping
 	return 0;
 }
 
-int obsidian_write_end(const struct kiocb *iocb, struct address_space *mapping,
-		       loff_t pos, unsigned int len, unsigned int copied,
-		       struct folio *folio, void *fsdata)
+int obsidian_write_end(const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct folio *folio, void *fsdata)
 {
 	struct inode *inode = folio->mapping->host;
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
@@ -114,15 +112,14 @@ int obsidian_write_end(const struct kiocb *iocb, struct address_space *mapping,
 }
 
 /* ------------------------------------------------------------------ */
-/* Block path resolution (ext2-style indirect blocks)                  */
+/* Block path resolution (ext2-style indirect blocks)                 */
 /* ------------------------------------------------------------------ */
 
 /*
  * Map a logical block number to a path of indices into i_data[] and
  * indirect blocks. Returns the depth (1–4), or 0 on error.
  */
-static int obsidian_block_to_path(struct inode *inode, long i_block,
-				  int offsets[4], int *boundary)
+static int obsidian_block_to_path(struct inode *inode, long i_block, int offsets[4], int *boundary)
 {
 	int ptrs      = ADDR_PER_BLOCK(inode->i_sb);
 	int ptrs_bits = ADDR_PER_BLOCK_BITS(inode->i_sb);
@@ -168,9 +165,7 @@ static int obsidian_block_to_path(struct inode *inode, long i_block,
  * Walk the indirect-block chain. Returns NULL if the chain is complete
  * (block found), or a pointer to the first missing Indirect entry.
  */
-static Indirect *obsidianfs_get_branch(struct inode *inode, int depth,
-				       int *offsets, Indirect chain[4],
-				       int *err)
+static Indirect *obsidianfs_get_branch(struct inode *inode, int depth, int *offsets, Indirect chain[4], int *err)
 {
 	struct super_block *sb = inode->i_sb;
 	Indirect *p = chain;
@@ -207,12 +202,11 @@ no_block:
 }
 
 /* ------------------------------------------------------------------ */
-/* Block allocation helpers                                             */
+/* Block allocation helpers                                           */
 /* ------------------------------------------------------------------ */
 
 /* TODO: requires on-disk block group layout in s_fs_info */
-static obsidianfs_fsblk_t obsidianfs_group_first_block_no(struct super_block *sb,
-							   unsigned long group_no)
+static obsidianfs_fsblk_t obsidianfs_group_first_block_no(struct super_block *sb, unsigned long group_no)
 {
 	return 0;
 }
@@ -238,8 +232,7 @@ static unsigned long obsidianfs_find_near(struct inode *inode, Indirect *ind)
 	return bg_start + colour;
 }
 
-static unsigned long obsidianfs_find_goal(struct inode *inode, long block,
-					  Indirect *partial)
+static unsigned long obsidianfs_find_goal(struct inode *inode, long block, Indirect *partial)
 {
 	struct obsidianfs_block_alloc_info *block_i =
 		OBSIDIANFS_INODE(inode)->i_block_alloc_info;
