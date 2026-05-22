@@ -8,17 +8,17 @@ ObsidianFS is a Linux kernel filesystem module written in C, developed as an aca
 
 ```
 obsidianfs/
-├── inode.h             on-disk inode struct, in-memory inode_meta, OBSIDIANFS_INODE()
-├── super.h             on-disk superblock struct, in-memory sb_info, disk layout constants
-├── pageops.h           block addressing types: Indirect, obsidianfs_block_alloc_info
-├── file.h              exported symbols for file and directory operations
-├── ioctlops.h          ioctl command definitions (shared with userspace)
-├── super.c             superblock, module init/exit, inode slab, write_inode
-├── inode.c             inode lifecycle: iget, create, directory inode_operations
-├── file.c              file_operations, address_space_operations, mknod/mkdir
-├── pageops.c           page cache I/O, ext2-style block mapping
-├── ioctlops.c          ioctl handler
-└── obsidiancommand.c   userspace CLI to invoke custom ioctls
+├── inode.h          — on-disk inode struct, in-memory inode_meta, OBSIDIANFS_INODE()
+├── super.h          — on-disk superblock struct, in-memory sb_info, disk layout constants
+├── pageops.h        — block addressing types: Indirect, obsidianfs_block_alloc_info
+├── file.h           — exported symbols for file and directory operations
+├── ioctlops.h       — ioctl command definitions (shared with userspace)
+├── super.c          — superblock, module init/exit, inode slab, write_inode
+├── inode.c          — inode lifecycle: iget, create, directory inode_operations
+├── file.c           — file_operations, address_space_operations, mknod/mkdir
+├── pageops.c        — page cache I/O, ext2-style block mapping
+├── ioctlops.c       — ioctl handler
+└── obsidiancommand.c — userspace CLI to invoke custom ioctls
 ```
 
 ---
@@ -40,7 +40,7 @@ The on-disk inode is 128 bytes, naturally aligned without implicit padding. Key 
 
 ---
 
-## Core data structures `inode.h`
+## Core data structures — `inode.h`
 
 ### `obsidianfs_inode_meta`
 
@@ -50,7 +50,7 @@ Beyond the standard VFS inode, `obsidianfs_inode_meta` carries: a `struct mutex`
 
 ---
 
-## Module lifecycle `super.c`
+## Module lifecycle — `super.c`
 
 ### Inode slab: `obsidianfs_alloc_inode` / `obsidianfs_free_inode`
 
@@ -72,7 +72,7 @@ ObsidianFS manages its inode memory through a dedicated `kmem_cache` created at 
 
 ---
 
-## Inode operations `inode.c`
+## Inode operations — `inode.c`
 
 ### Loading from disk: `obsidianfs_iget`
 
@@ -108,7 +108,7 @@ ObsidianFS manages its inode memory through a dedicated `kmem_cache` created at 
 
 ---
 
-## File operations `file.c`
+## File operations — `file.c`
 
 ### Write path: `obsidian_write_iter`
 
@@ -120,7 +120,7 @@ ObsidianFS manages its inode memory through a dedicated `kmem_cache` created at 
 
 ---
 
-## Page and block operations `pageops.c`
+## Page and block operations — `pageops.c`
 
 ### Write preparation: `obsidian_write_begin`
 
@@ -156,7 +156,7 @@ Links a newly allocated branch into the inode's block tree by writing the first 
 
 ---
 
-## ioctl interface `ioctlops.c`
+## ioctl interface — `ioctlops.c`
 
 ### File protection: `OBSIDIAN_IOC_PROTECT`
 
@@ -168,7 +168,7 @@ Copies a single byte (1 = protected, 0 = not protected) to userspace via `copy_t
 
 ---
 
-## Userspace tool `obsidiancommand.c`
+## Userspace tool — `obsidiancommand.c`
 
 `obsidiancommand` opens a file by path and issues `OBSIDIAN_IOC_PROTECT`. The `ioctlops.h` header uses `#ifdef __KERNEL__` so that ioctl command definitions are shared between kernel and userspace without conflict.
 
@@ -201,7 +201,7 @@ sudo make unload  # umount + rmmod
 ```bash
 echo "important data" > /tmp/obsidian/myfile
 ./commandBin /tmp/obsidian/myfile
-echo "overwrite attempt" > /tmp/obsidian/myfile  # → Permission denied
+echo "overwrite attempt" > /tmp/obsidian/myfile  # Permission denied
 ```
 
 ---
@@ -221,15 +221,15 @@ ObsidianFS compiles cleanly on Linux **6.19**. The following components are impl
 
 The following work remains before the filesystem is fully persistent:
 
-1. **Block allocator** implement `obsidianfs_alloc_branch` to read the free block bitmap, find free blocks, mark them used, and return their numbers. `obsidianfs_group_first_block_no` also needs to return the correct group start.
+1. **Block allocator** — implement `obsidianfs_alloc_branch` to read the free block bitmap, find free blocks, mark them used, and return their numbers. `obsidianfs_group_first_block_no` also needs to return the correct group start.
 
-2. **`mkfs.obsidianfs`** userspace tool to initialise a blank device: write the superblock, inode bitmap, block bitmap, inode table, and root inode (ino 1). 
+2. **`mkfs.obsidianfs`** — userspace tool to initialise a blank device: write the superblock, inode bitmap, block bitmap, inode table, and root inode (ino 1). 
 
-3. **On-disk directory entry format** define `obsidianfs_dir_entry` (name, inode number, record length).
+3. **On-disk directory entry format** — define `obsidianfs_dir_entry` (name, inode number, record length).
 
-4. **Persistent directory lookup** replace `simple_lookup` with a custom `obsidianfs_lookup` that reads directory entries from disk and calls `obsidianfs_iget` on found entries.
+4. **Persistent directory lookup** — replace `simple_lookup` with a custom `obsidianfs_lookup` that reads directory entries from disk and calls `obsidianfs_iget` on found entries.
 
-5. **Persistent directory read** replace `simple_dir_operations` with an `obsidianfs_readdir` that iterates on-disk entries for `getdents`.
+5. **Persistent directory read** — replace `simple_dir_operations` with an `obsidianfs_readdir` that iterates on-disk entries for `getdents`.
 
 
 ---

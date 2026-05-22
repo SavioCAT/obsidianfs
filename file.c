@@ -28,15 +28,23 @@ const struct address_space_operations obsidianfs_page_ops = {
 int obsidianfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, dev_t dev)
 {
 	struct inode *inode = obsidianfs_create_inode_memory(dir->i_sb, dir, mode, dev);
+	int err;
 
 	if (!inode) {
 		pr_err("[ERROR OBSIDIANFS] %s: get_inode failed\n", __func__);
 		return -ENOSPC;
 	}
 
+	err = obsidianfs_add_dir_entry(dir, &dentry->d_name, inode->i_ino);
+	if (err) {
+		iput(inode);
+		return err;
+	}
+
 	d_instantiate(dentry, inode);
 	dget(dentry);
 	inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir));
+	mark_inode_dirty(dir);
 	return 0;
 }
 

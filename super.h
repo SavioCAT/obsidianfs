@@ -3,12 +3,7 @@
 
 #include <linux/fs.h>
 #include <linux/buffer_head.h>
-
-#define OBSIDIANFS_SB_BLOCK           0
-#define OBSIDIANFS_INODE_BITMAP_BLOCK 1
-#define OBSIDIANFS_BLOCK_BITMAP_BLOCK 2
-#define OBSIDIANFS_INODE_TABLE_BLOCK  3
-#define OBSIDIANFS_ROOT_INO           1
+#include "addressbitmap.h"
 
 
 struct obsidianfs_super_block {
@@ -37,7 +32,7 @@ struct obsidianfs_sb_info {
 	unsigned long			 		s_blocks_count;
 	unsigned long			 		s_inodes_count;
 	unsigned long			 		s_first_data_block;
-	spinlock_t			 			s_lock;
+	struct mutex		 			s_lock;
 };
 
 /*

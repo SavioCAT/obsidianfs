@@ -13,16 +13,23 @@ module:
 
 userspace:
 	gcc obsidiancommand.c -o commandBin
+	gcc -O2 -Wall -Wextra mkfs.obsidianfs.c -o mkfs.obsidianfs
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
-	rm -f commandBin
+	rm -f commandBin mkfs.obsidianfs
 
 load:
 	sudo insmod obsidianfs.ko
-	sudo mkdir -p /tmp/obsidian
-	sudo mount -t obsidianfs none /tmp/obsidian
+	dd if=/dev/zero of=./test.img bs=4096 count=6400000
+	./mkfs.obsidianfs -L test ./test.img
+	sudo losetup -f test.img
+	mkdir /tmp/obsidianfs
+	echo "Look for which loop was attrbuted to obsidianfs with sudo losetup -l"
+	echo "After do this command: sudo mount -t obsidianfs_persistent /dev/loopX /tmp/obsidianfs"
 
 unload:
-	sudo umount /tmp/obsidian
+	sudo umount /tmp/obsidianfs
+	sudo rm -rf /tmp/obsidianfs
+	sudo rm -rf ./test.img
 	sudo rmmod obsidianfs

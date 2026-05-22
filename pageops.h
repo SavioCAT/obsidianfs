@@ -5,7 +5,8 @@
 #include <linux/pagemap.h>
 #include <linux/log2.h>
 #include <linux/rbtree.h>
-#include "inode.h"
+//#include "inode.h"
+typedef unsigned long obsidianfs_fsblk_t;
 
 /* block addressing constants */
 #define NDIR_BLOCKS          12
@@ -48,5 +49,7 @@ struct obsidianfs_block_alloc_info {
 };
 
 extern void obsidianfs_init_block_alloc_info(struct inode *inode);
+extern int  obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create);
+extern void obsidianfs_free_blocks(struct inode *inode, obsidianfs_fsblk_t block, unsigned long count);
 
 #endif

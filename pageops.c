@@ -12,12 +12,13 @@
 #include <linux/slab.h>
 #include "inode.h"
 #include "pageops.h"
+#include "super.h"
 
 /* ------------------------------------------------------------------ */
 /* Forward declarations                                               */
 /* ------------------------------------------------------------------ */
 
-static int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create);
+int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create);
 static int obsidianfs_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create);
 static int obsidian_block_to_path(struct inode *inode, long i_block, int offsets[4], int *boundary);
 static Indirect *obsidianfs_get_branch(struct inode *inode, int depth, int *offsets, Indirect chain[4], int *err);
@@ -26,6 +27,8 @@ static unsigned long obsidianfs_find_near(struct inode *inode, Indirect *ind);
 static unsigned long obsidianfs_find_goal(struct inode *inode, long block, Indirect *partial);
 static int obsidianfs_blks_to_allocate(Indirect *branch, int k, unsigned long blks, int blocks_to_boundary);
 static int obsidianfs_alloc_branch(struct inode *inode, int indirect_blks, int *blks, unsigned long goal, int *offsets, Indirect *branch);
+static int obsidianfs_alloc_blocks(struct inode *inode, obsidianfs_fsblk_t goal, int indirect_blks, int blks, obsidianfs_fsblk_t new_blocks[4], int *err);
+void obsidianfs_free_blocks(struct inode *inode, obsidianfs_fsblk_t block, unsigned long count);
 static void obsidianfs_splice_branch(struct inode *inode, long block, Indirect *where, int num, int blks);
 
 /* ------------------------------------------------------------------ */
@@ -58,57 +61,26 @@ int obsidian_write_begin(const struct kiocb *iocb, struct address_space *mapping
 			 loff_t pos, unsigned len,
 			 struct folio **foliop, void **fsdata)
 {
-	struct folio *folio;
-
-	folio = __filemap_get_folio(mapping, pos / PAGE_SIZE,
-				    FGP_WRITEBEGIN, mapping_gfp_mask(mapping));
-	if (IS_ERR(folio)) {
-		pr_err("[ERROR OBSIDIANFS] %s: get_folio failed\n", __func__);
-		return PTR_ERR(folio);
-	}
-
-	*foliop = folio;
-
-	/*
-	 * Zero the region outside the write to prevent kernel data leaks
-	 * when the folio is not yet up-to-date and the write is partial.
-	 */
-	if (!folio_test_uptodate(folio) && len != folio_size(folio)) {
-		size_t from = offset_in_folio(folio, pos);
-
-		folio_zero_segments(folio, 0, from, from + len, folio_size(folio));
-	}
-
-	return 0;
+	return block_write_begin(mapping, pos, len, foliop, obsidianfs_get_block);
 }
 
-int obsidian_write_end(const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct folio *folio, void *fsdata)
+int obsidian_write_end(const struct kiocb *iocb, struct address_space *mapping,
+		       loff_t pos, unsigned int len, unsigned int copied,
+		       struct folio *folio, void *fsdata)
 {
-	struct inode *inode = folio->mapping->host;
+	struct inode *inode = mapping->host;
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
-	loff_t last_pos = pos + copied;
+	int ret = generic_write_end(iocb, mapping, pos, len, copied, folio, fsdata);
 
-	if (!folio_test_uptodate(folio)) {
-		if (copied < len) {
-			size_t from = offset_in_folio(folio, pos);
+	if (ret > 0) {
+		loff_t last = pos + ret;
 
-			folio_zero_range(folio, from + copied, len - copied);
-		}
-		folio_mark_uptodate(folio);
+		mutex_lock(&oi->i_lock);
+		if (last > oi->valid_size)
+			oi->valid_size = last;
+		mutex_unlock(&oi->i_lock);
 	}
-
-	mutex_lock(&oi->i_lock);
-	if (last_pos > i_size_read(inode))
-		i_size_write(inode, last_pos);
-	if (last_pos > oi->valid_size)
-		oi->valid_size = last_pos;
-	mutex_unlock(&oi->i_lock);
-
-	folio_mark_dirty(folio);
-	folio_unlock(folio);
-	folio_put(folio);
-
-	return copied;
+	return ret;
 }
 
 /* ------------------------------------------------------------------ */
@@ -151,8 +123,7 @@ static int obsidian_block_to_path(struct inode *inode, long i_block, int offsets
 		offsets[n++] = i_block & (ptrs - 1);
 		final = ptrs;
 	} else {
-		pr_err("[ERROR OBSIDIANFS] %s: block %ld out of range\n",
-		       __func__, i_block);
+		pr_err("[ERROR OBSIDIANFS] %s: block %ld out of range\n", __func__, i_block);
 	}
 
 	if (boundary)
@@ -288,13 +259,308 @@ static int obsidianfs_blks_to_allocate(Indirect *branch, int k, unsigned long bl
 	return count;
 }
 
-/*
- * TODO: allocate a chain of blocks from the on-disk bitmap.
- * Requires the block-group allocator (s_fs_info + bitmap blocks).
- */
-static int obsidianfs_alloc_branch(struct inode *inode, int indirect_blks, int *blks, unsigned long goal, int *offsets, Indirect *branch)
+static int obsidianfs_alloc_branch(struct inode *inode, int indirect_blks,
+				    int *blks, unsigned long goal,
+				    int *offsets, Indirect *branch)
 {
-	return -ENOSPC;
+	int blocksize = inode->i_sb->s_blocksize;
+	int i, n = 0;
+	int err = 0;
+	struct buffer_head *bh;
+	int num;
+	obsidianfs_fsblk_t new_blocks[4];
+	obsidianfs_fsblk_t current_block;
+
+	num = obsidianfs_alloc_blocks(inode, goal, indirect_blks, *blks,
+				      new_blocks, &err);
+	if (err)
+		return err;
+
+	branch[0].key = cpu_to_le32(new_blocks[0]);
+	for (n = 1; n <= indirect_blks; n++) {
+		bh = sb_getblk(inode->i_sb, new_blocks[n - 1]);
+		if (unlikely(!bh)) {
+			err = -ENOMEM;
+			goto failed;
+		}
+		branch[n].bh = bh;
+		lock_buffer(bh);
+		memset(bh->b_data, 0, blocksize);
+		branch[n].p = (__le32 *)bh->b_data + offsets[n];
+		branch[n].key = cpu_to_le32(new_blocks[n]);
+		*branch[n].p = branch[n].key;
+		if (n == indirect_blks) {
+			current_block = new_blocks[n];
+			for (i = 1; i < num; i++)
+				*(branch[n].p + i) = cpu_to_le32(++current_block);
+		}
+		set_buffer_uptodate(bh);
+		unlock_buffer(bh);
+		mark_buffer_dirty(bh);
+		if (S_ISDIR(inode->i_mode) && IS_DIRSYNC(inode))
+			sync_dirty_buffer(bh);
+	}
+	*blks = num;
+	return err;
+
+failed:
+	for (i = 1; i < n; i++)
+		bforget(branch[i].bh);
+	for (i = 0; i < indirect_blks; i++)
+		obsidianfs_free_blocks(inode, new_blocks[i], 1);
+	obsidianfs_free_blocks(inode, new_blocks[i], num);
+	return err;
+}
+
+/*
+ * Allocate indirect_blks metadata blocks and blks contiguous data blocks
+ * from the block bitmap, starting near 'goal'.
+ *
+ * new_blocks[0..indirect_blks-1] : one metadata block each
+ * new_blocks[indirect_blks]      : first data block (next blks-1 are consecutive)
+ *
+ * Returns the number of data blocks allocated, 0 on error (*err set).
+ */
+static int obsidianfs_alloc_blocks(struct inode *inode, obsidianfs_fsblk_t goal,
+				    int indirect_blks, int blks,
+				    obsidianfs_fsblk_t new_blocks[4], int *err)
+{
+	struct super_block *sb = inode->i_sb;
+	struct obsidianfs_sb_info *sbi = OBSIDIANFS_SB(sb);
+	struct obsidianfs_super_block *es = sbi->s_es;
+	unsigned long first_data    = le32_to_cpu(es->s_first_data_block);
+	unsigned long blocks_count  = le32_to_cpu(es->s_blocks_count);
+	unsigned long nr_bits       = blocks_count - first_data;
+	unsigned long bits_per_bmap = sb->s_blocksize * 8UL;
+	int total     = indirect_blks + blks;
+	int allocated = 0;
+	int ret       = 0;
+	unsigned long search_start;
+	int j;
+
+	*err = 0;
+
+	if (unlikely(total <= 0 || total > 4 || blks <= 0 || nr_bits == 0)) {
+		*err = -EINVAL;
+		return 0;
+	}
+
+	if (goal < first_data || goal >= blocks_count)
+		goal = first_data;
+
+	mutex_lock(&sbi->s_lock);
+
+	if (le32_to_cpu(es->s_free_blocks_count) < (u32)total) {
+		*err = -ENOSPC;
+		mutex_unlock(&sbi->s_lock);
+		return 0;
+	}
+
+	search_start = goal - first_data;
+
+	/* --- Allocate indirect blocks one at a time --- */
+	for (allocated = 0; allocated < indirect_blks; allocated++) {
+		struct buffer_head *bmap_bh;
+		bool found = false;
+		int pass;
+
+		for (pass = 0; pass < 2 && !found; pass++) {
+			unsigned long cur = (pass == 0) ? search_start : 0;
+			unsigned long end = (pass == 0) ? nr_bits : search_start;
+
+			while (cur < end) {
+				unsigned long bmap_idx = cur / bits_per_bmap;
+				unsigned long bit_from = cur % bits_per_bmap;
+				unsigned long bit_end  = min(bits_per_bmap,
+						end - bmap_idx * bits_per_bmap);
+				unsigned long bit;
+
+				bmap_bh = sb_bread(sb, OBSIDIANFS_BLOCK_BITMAP_BLOCK + bmap_idx);
+				if (!bmap_bh) {
+					*err = -EIO;
+					goto rollback;
+				}
+
+				bit = find_next_zero_bit_le(bmap_bh->b_data, bit_end, bit_from);
+				if (bit < bit_end) {
+					__set_bit_le(bit, bmap_bh->b_data);
+					le32_add_cpu(&es->s_free_blocks_count, -1);
+					new_blocks[allocated] = first_data + bmap_idx * bits_per_bmap + bit;
+					mark_buffer_dirty(bmap_bh);
+					brelse(bmap_bh);
+					search_start = bmap_idx * bits_per_bmap + bit + 1;
+					found = true;
+					break;
+				}
+				brelse(bmap_bh);
+				cur = (bmap_idx + 1) * bits_per_bmap;
+			}
+		}
+
+		if (!found) {
+			*err = -ENOSPC;
+			goto rollback;
+		}
+	}
+
+	/* --- Allocate 'blks' contiguous data blocks — two-pass search around goal --- */
+	{
+		bool found = false;
+		int pass;
+
+		for (pass = 0; pass < 2 && !found; pass++) {
+			unsigned long cur = (pass == 0) ? search_start : 0;
+			unsigned long end = (pass == 0) ? nr_bits : search_start;
+
+			while (cur < end && !found) {
+				unsigned long bmap_idx = cur / bits_per_bmap;
+				unsigned long bit_from = cur % bits_per_bmap;
+				unsigned long bit_end  = min(bits_per_bmap,
+						end - bmap_idx * bits_per_bmap);
+				unsigned long b, run, k;
+				struct buffer_head *bmap_bh;
+
+				bmap_bh = sb_bread(sb, OBSIDIANFS_BLOCK_BITMAP_BLOCK + bmap_idx);
+				if (!bmap_bh) {
+					*err = -EIO;
+					goto rollback;
+				}
+
+				b = bit_from;
+				while (b < bit_end) {
+					b = find_next_zero_bit_le(bmap_bh->b_data, bit_end, b);
+					if (b >= bit_end)
+						break;
+
+					for (run = 0;
+					     b + run < bit_end &&
+					     !test_bit_le(b + run, bmap_bh->b_data) &&
+					     run < (unsigned long)blks;
+					     run++)
+						;
+
+					if (run >= (unsigned long)blks) {
+						for (k = 0; k < (unsigned long)blks; k++)
+							__set_bit_le(b + k, bmap_bh->b_data);
+						le32_add_cpu(&es->s_free_blocks_count, -(u32)blks);
+						new_blocks[allocated] = first_data +
+							bmap_idx * bits_per_bmap + b;
+						mark_buffer_dirty(bmap_bh);
+						brelse(bmap_bh);
+						ret = blks;
+						found = true;
+						break;
+					}
+					b += run + 1;
+				}
+
+				if (!found)
+					brelse(bmap_bh);
+				cur = (bmap_idx + 1) * bits_per_bmap;
+			}
+		}
+
+		if (!found) {
+			*err = -ENOSPC;
+			goto rollback;
+		}
+	}
+	goto out_unlock;
+
+rollback:
+	for (j = 0; j < allocated; j++) {
+		unsigned long rel      = new_blocks[j] - first_data;
+		unsigned long bmap_idx = rel / bits_per_bmap;
+		unsigned long bit_pos  = rel % bits_per_bmap;
+		struct buffer_head *bmap_bh = sb_bread(sb, OBSIDIANFS_BLOCK_BITMAP_BLOCK + bmap_idx);
+
+		if (bmap_bh) {
+			__clear_bit_le(bit_pos, bmap_bh->b_data);
+			le32_add_cpu(&es->s_free_blocks_count, 1);
+			mark_buffer_dirty(bmap_bh);
+			brelse(bmap_bh);
+		}
+	}
+out_unlock:
+	mutex_unlock(&sbi->s_lock);
+	if (ret > 0)
+		mark_buffer_dirty(sbi->s_sbh);
+	return ret;
+}
+
+/*
+ * Free 'count' blocks starting at 'block'.
+ * Updates the block bitmap (block OBSIDIANFS_BLOCK_BITMAP_BLOCK) and
+ * s_free_blocks_count in the on-disk superblock.
+ */
+void obsidianfs_free_blocks(struct inode *inode, obsidianfs_fsblk_t block,
+			     unsigned long count)
+{
+	struct super_block *sb = inode->i_sb;
+	struct obsidianfs_sb_info *sbi = OBSIDIANFS_SB(sb);
+	struct obsidianfs_super_block *es = sbi->s_es;
+	unsigned long first_data    = le32_to_cpu(es->s_first_data_block);
+	unsigned long blocks_count  = le32_to_cpu(es->s_blocks_count);
+	unsigned long bits_per_bmap = sb->s_blocksize * 8UL;
+	unsigned long freed = 0;
+	unsigned long i     = 0;
+
+	if (count == 0)
+		return;
+
+	if (block < first_data || block + count > blocks_count ||
+	    block + count < block) {
+		pr_err("[OBSIDIANFS ERROR] %s: invalid block range [%lu, %lu) "
+		       "(first=%lu, total=%lu)\n",
+		       __func__, block, block + count, first_data, blocks_count);
+		return;
+	}
+
+	mutex_lock(&sbi->s_lock);
+
+	while (i < count) {
+		unsigned long rel      = block + i - first_data;
+		unsigned long bmap_idx = rel / bits_per_bmap;
+		unsigned long bit_from = rel % bits_per_bmap;
+		unsigned long n        = min(bits_per_bmap - bit_from, count - i);
+		struct buffer_head *bmap_bh;
+		unsigned long k;
+
+		bmap_bh = sb_bread(sb, OBSIDIANFS_BLOCK_BITMAP_BLOCK + bmap_idx);
+		if (!bmap_bh) {
+			pr_err("[OBSIDIANFS ERROR] %s: cannot read block bitmap block %lu\n",
+			       __func__, bmap_idx);
+			break;
+		}
+
+		for (k = 0; k < n; k++) {
+			unsigned long bit = bit_from + k;
+
+			if (test_bit_le(bit, bmap_bh->b_data)) {
+				__clear_bit_le(bit, bmap_bh->b_data);
+				freed++;
+			} else {
+				pr_err("[OBSIDIANFS ERROR] %s: block %lu already free\n",
+				       __func__, block + i + k);
+			}
+		}
+
+		mark_buffer_dirty(bmap_bh);
+		if (sb->s_flags & SB_SYNCHRONOUS)
+			sync_dirty_buffer(bmap_bh);
+		brelse(bmap_bh);
+		i += n;
+	}
+
+	if (freed)
+		le32_add_cpu(&es->s_free_blocks_count, (u32)freed);
+
+	mutex_unlock(&sbi->s_lock);
+
+	if (freed) {
+		mark_buffer_dirty(sbi->s_sbh);
+		mark_inode_dirty(inode);
+	}
 }
 
 /*
@@ -421,7 +687,7 @@ cleanup:
 	return err;
 }
 
-static int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create)
+int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create)
 {
 	unsigned max_blocks = bh_result->b_size >> inode->i_blkbits;
 	bool new      = false;

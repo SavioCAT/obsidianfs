@@ -7,6 +7,7 @@
 #include "file.h"
 #include "pageops.h"
 #include "super.h"
+#include "addressbitmap.h"
 
 static struct kmem_cache *obsidianfs_inode_cache;
 
@@ -99,6 +100,10 @@ static int obsidianfs_write_inode(struct inode *inode, struct writeback_control 
 
 static void obsidianfs_evict_inode(struct inode *inode)
 {
+	if (!inode->i_nlink) {
+		obsidianfs_truncate_blocks(inode);
+		obsidianfs_free_ino(inode->i_sb, inode->i_ino);
+	}
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);
 }
@@ -169,7 +174,7 @@ static int obsidianfs_fill_super_persistent(struct super_block *sb, struct fs_co
     	sbi->s_sb_block = OBSIDIANFS_SB_BLOCK;
 	}
 
-	spin_lock_init(&sbi->s_lock); // Set the lock 
+	mutex_init(&sbi->s_lock);
 
 	// Step 1: set a safe minimum blocksize before the first sb_bread
 	blocksize = sb_min_blocksize(sb, BLOCK_SIZE);
