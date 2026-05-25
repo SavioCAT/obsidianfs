@@ -1,18 +1,8 @@
 #ifndef INODEOBSIDIANFS_H
 #define INODEOBSIDIANFS_H
 
-#include <linux/fs.h>
-#include <linux/pagemap.h>
-#include <linux/mm.h>
-#include <linux/err.h>
-#include <linux/rbtree.h>
-#include "pageops.h"
-
-#define OBSIDIAN_MAGIC    0x6C854200
-#define OBSIDIAN_N_BLOCKS 15   /* 12 direct + 1 indirect + 1 double indirect + 1 tripe indirect */
-
-typedef unsigned long obsidianfs_fsblk_t;
-
+#define OBSIDIAN_MAGIC    0x6C854200u
+#define OBSIDIAN_N_BLOCKS 15u   /* 12 direct + 1 indirect + 1 double indirect + 1 tripe indirect */
 
 struct obsidianfs_inode {
 	__le64	i_size;			/* Size in bytes Using 64 bits for the size allow 2^63 bytes files (really huge)*/
@@ -31,6 +21,17 @@ struct obsidianfs_inode {
 	__u8	i_flagsProtected;	/* Flag for the file protection */
 	__u8	i_reserved[19];		/* Reserved — pad to 128 bytes */
 };
+
+#ifdef __KERNEL__
+
+#include <linux/fs.h>
+#include <linux/pagemap.h>
+#include <linux/mm.h>
+#include <linux/err.h>
+#include <linux/rbtree.h>
+#include "pageops.h"
+
+typedef unsigned long obsidianfs_fsblk_t;
 
 struct obsidianfs_inode_meta {
 	struct inode  vfs_inode;          /* VFS inode — MUST be first */
@@ -73,5 +74,6 @@ static inline unsigned int obsidianfs_dir_rec_len(unsigned int name_len)
 	return (OBSIDIANFS_DIR_ENTRY_HSIZE + name_len + 3) & ~3u;
 }
 
+#endif
 
 #endif

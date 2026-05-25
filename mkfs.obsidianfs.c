@@ -13,10 +13,10 @@
 #include <linux/fs.h>
 #include <endian.h>
 #include "addressbitmap.h"
+#include <linux/types.h>
+#include "inode.h"
 
-#define OBSIDIANFS_MAGIC              0x6C854200u
 #define OBSIDIANFS_INODE_SIZE         128u
-#define OBSIDIANFS_N_BLOCKS           15u
 
 struct __attribute__((packed)) obsidianfs_super_block {
 	uint32_t s_magic;				// 4
@@ -35,23 +35,6 @@ struct __attribute__((packed)) obsidianfs_super_block {
 									// SUM = 4096 bytes
 };
 
-struct __attribute__((packed)) obsidianfs_inode {
-	uint64_t i_size; 	//8
-	uint32_t i_atime; 	//4 
-	uint32_t i_ctime; 	//4 
-	uint32_t i_mtime; 	//4 
-	uint32_t i_dtime; 	//4 
-	uint32_t i_uid; 	//4 
-	uint32_t i_gid;		//4 
-	uint32_t i_blocks;	//4 
-	uint32_t i_flags;	//4 
-	uint16_t i_mode;	//2
-	uint16_t i_links_count; 				//2
-	uint32_t i_generation;					//4
-	uint32_t i_block[OBSIDIANFS_N_BLOCKS];	//4*15
-	uint8_t  i_padding[20];				//20
-	// SUM = 128 bytes
-};
 
 static uint64_t get_device_size(int fd)
 {
@@ -205,7 +188,7 @@ int main(int argc, char *argv[])
 		uint8_t *wbuf;
 
 		memset(&sb, 0, sizeof(sb));
-		sb.s_magic             = htole32(OBSIDIANFS_MAGIC); // htole: This functions convert the byte encoding of integer values from the byte order that the current CPU (the "host") uses
+		sb.s_magic             = htole32(OBSIDIAN_MAGIC); // htole: This functions convert the byte encoding of integer values from the byte order that the current CPU (the "host") uses
 		sb.s_blocks_count      = htole32(blocks_count);
 		sb.s_inodes_count      = htole32(inodes_count);
 		sb.s_free_blocks_count = htole32(free_blocks);
@@ -295,9 +278,9 @@ int main(int argc, char *argv[])
 		root.i_gid         = 0;
 		root.i_size        = 0;
 		root.i_blocks      = 0;
-		root.i_atime       = htole32(now);
-		root.i_ctime       = htole32(now);
-		root.i_mtime       = htole32(now);
+		root.i_atime       = htole32(now); //Access time
+		root.i_ctime       = htole32(now); //Creation time
+		root.i_mtime       = htole32(now); //modification time
 		root.i_dtime       = 0;
 		memcpy(itable, &root, sizeof(root));
 

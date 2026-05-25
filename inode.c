@@ -62,6 +62,8 @@ static const struct file_operations obsidianfs_dir_ops = {
  * @ino: the inode number
  * Returns the inode, or an error pointer on failure.
  */
+
+// DISK --> MEMORY
 struct inode *obsidianfs_iget(struct super_block *sb, unsigned long ino)
 {
 	struct obsidianfs_sb_info *sbi = OBSIDIANFS_SB(sb);
@@ -125,7 +127,7 @@ struct inode *obsidianfs_iget(struct super_block *sb, unsigned long ino)
 	memcpy(oi->i_data, raw->i_block, sizeof(oi->i_data));
 
 	oi->valid_size     = inode->i_size;
-	oi->flagsProtected = false;
+	oi->flagsProtected = raw->i_flagsProtected ? true : false;
 	oi->i_block_group  = 0;
 
 	brelse(bh);

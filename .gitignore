@@ -3,4 +3,5 @@ modules.order
 Module.symvers
 obsidianfs.ko
 obsidianfs.mod  
-obsidianfs.mod.c  
+obsidianfs.mod.c
+test.img

@@ -44,7 +44,7 @@ static void obsidianfs_i_init_once(void *foo)
 /* ------------------------------------------------------------------ */
 
 
-// Write all the metadata of an inode from the memory to the disk
+// Write all the metadata of an inode from the memory to the disk MEMORY --> DISK
 static int obsidianfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 {
 	struct obsidianfs_sb_info *sbi = OBSIDIANFS_SB(inode->i_sb);
@@ -75,7 +75,7 @@ static int obsidianfs_write_inode(struct inode *inode, struct writeback_control 
 		return -EIO;
 	}
 
-	raw = (struct obsidianfs_inode *)(bh->b_data + offset);
+	raw = (struct obsidianfs_inode *)(bh->b_data + offset); // Representation of the inode on the disk
 
 	raw->i_mode        = cpu_to_le16(inode->i_mode);
 	raw->i_uid         = cpu_to_le32(from_kuid(inode->i_sb->s_user_ns, inode->i_uid));
@@ -86,6 +86,7 @@ static int obsidianfs_write_inode(struct inode *inode, struct writeback_control 
 	raw->i_atime       = cpu_to_le32(inode_get_atime_sec(inode));
 	raw->i_ctime       = cpu_to_le32(inode_get_ctime_sec(inode));
 	raw->i_mtime       = cpu_to_le32(inode_get_mtime_sec(inode));
+	raw->i_flagsProtected = oi->flagsProtected ? 1 : 0;
 	memcpy(raw->i_block, oi->i_data, sizeof(raw->i_block));
 
 	mark_buffer_dirty(bh);
@@ -115,38 +116,6 @@ static const struct super_operations obsidianfs_sb_ops = {
 	.evict_inode  = obsidianfs_evict_inode,
 	.statfs       = simple_statfs,
 };
-
-/* ------------------------------------------------------------------ */
-/* In-memory mount (OLD STYLE)                                        */
-/* ------------------------------------------------------------------ */
-
-/*
-static int obsidianfs_fill_super(struct super_block *sb, struct fs_context *fc)
-{
-	struct inode *root;
-
-	sb->s_magic          = OBSIDIAN_MAGIC;
-	sb->s_op             = &obsidianfs_sb_ops;
-	sb->s_blocksize      = PAGE_SIZE;
-	sb->s_blocksize_bits = PAGE_SHIFT;
-	sb->s_maxbytes       = MAX_LFS_FILESIZE;
-
-	root = obsidianfs_create_inode_memory(sb, NULL, S_IFDIR | 0755, 0);
-	if (!root) {
-		pr_err("[ERROR OBSIDIANFS] %s: cannot create root inode\n", __func__);
-		return -ENOMEM;
-	}
-
-	sb->s_root = d_make_root(root);
-	if (!sb->s_root) {
-		pr_err("[ERROR OBSIDIANFS] %s: cannot create root dentry\n", __func__);
-		return -ENOMEM;
-	}
-
-	pr_info("[INFO OBSIDIANFS] superblock mounted (in-memory)\n");
-	return 0;
-}
-*/
 
 /* ------------------------------------------------------------------ */
 /* Persistent (block-device) mount                                    */
@@ -256,40 +225,6 @@ err_sbi:
 }
 
 /* ------------------------------------------------------------------ */
-/* fs_context — in-memory fs (OLD STYLE)                              */
-/* ------------------------------------------------------------------ */
-
-/*
-static int obsidianfs_get_tree(struct fs_context *fc)
-{
-	return get_tree_nodev(fc, obsidianfs_fill_super);
-}
-*/
-
-/*
-static const struct fs_context_operations obsidianfs_context_ops = {
-	.get_tree = obsidianfs_get_tree,
-};
-*/
-
-/*
-static int obsidianfs_init_fs_context(struct fs_context *fc)
-{
-	fc->ops = &obsidianfs_context_ops;
-	return 0;
-}
-*/
-
-/*
-static struct file_system_type obsidianfs_type = {
-	.owner           = THIS_MODULE,
-	.name            = "obsidianfs",
-	.init_fs_context = obsidianfs_init_fs_context,
-	.kill_sb         = kill_anon_super,
-};
-*/
-
-/* ------------------------------------------------------------------ */
 /* fs_context — persistent fs (block device)                           */
 /* ------------------------------------------------------------------ */
 
@@ -320,17 +255,14 @@ static void obsidianfs_persistent_kill_sb(struct super_block *sb)
 {
 	struct obsidianfs_sb_info *sbi = OBSIDIANFS_SB(sb);
 
-	if (sbi) {
-		brelse(sbi->s_sbh);
-		kfree(sbi);
-		sb->s_fs_info = NULL;
-	}
 	kill_block_super(sb);
+	brelse(sbi->s_sbh);
+	kfree(sbi);
 }
 
 static struct file_system_type obsidianfs_persistent_type = {
 	.owner           = THIS_MODULE,
-	.name            = "obsidianfs_persistent",
+	.name            = "obsidianfs",
 	.init_fs_context = obsidianfs_persistent_init_fs_context,
 	.kill_sb         = obsidianfs_persistent_kill_sb,
 };
@@ -349,12 +281,6 @@ static int __init obsidianfs_init(void)
 		return -ENOMEM;
 	}
 
-	/*
-	err = register_filesystem(&obsidianfs_type);
-	if (err)
-		goto err_cache;
-	*/
-
 	err = register_filesystem(&obsidianfs_persistent_type);
 	if (err)
 		goto err_cache;
@@ -370,7 +296,6 @@ err_cache:
 static void __exit obsidianfs_exit(void)
 {
 	unregister_filesystem(&obsidianfs_persistent_type);
-	//unregister_filesystem(&obsidianfs_type);
 	kmem_cache_destroy(obsidianfs_inode_cache);
 	pr_info("[INFO OBSIDIANFS] module unloaded\n");
 }
