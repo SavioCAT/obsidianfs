@@ -114,6 +114,8 @@ struct inode *obsidianfs_iget(struct super_block *sb, unsigned long ino)
 
 	raw = (struct obsidianfs_inode *)(bh->b_data + offset);
 
+
+
 	inode->i_mode   = le16_to_cpu(raw->i_mode);
 	inode->i_uid    = make_kuid(sb->s_user_ns, le32_to_cpu(raw->i_uid));
 	inode->i_gid    = make_kgid(sb->s_user_ns, le32_to_cpu(raw->i_gid));
@@ -312,6 +314,7 @@ struct inode *obsidianfs_create_inode_memory(struct super_block *sb, const struc
 		break;
 	}
 
+	insert_inode_hash(inode);
 	return inode;
 }
 
@@ -328,23 +331,32 @@ struct inode *obsidianfs_create_inode_memory(struct super_block *sb, const struc
  */
 static struct buffer_head *obsidianfs_dir_getblk(struct inode *dir, sector_t lblock, int create)
 {
-	struct buffer_head bh_tmp = {};
+	struct buffer_head *bh_tmp;
 	struct buffer_head *bh;
 	int err;
 
-	bh_tmp.b_size = dir->i_sb->s_blocksize;
-	err = obsidianfs_get_block(dir, lblock, &bh_tmp, create);
-	if (err || !buffer_mapped(&bh_tmp))
+	bh_tmp = kzalloc(sizeof(*bh_tmp), GFP_NOFS);
+	if (!bh_tmp)
 		return NULL;
 
-	bh = sb_bread(dir->i_sb, bh_tmp.b_blocknr);
-	if (!bh)
+	bh_tmp->b_size = dir->i_sb->s_blocksize;
+	err = obsidianfs_get_block(dir, lblock, bh_tmp, create);
+	if (err || !buffer_mapped(bh_tmp)) {
+		kfree(bh_tmp);
 		return NULL;
+	}
 
-	if (buffer_new(&bh_tmp)) {
+	bh = sb_bread(dir->i_sb, bh_tmp->b_blocknr);
+	if (!bh) {
+		kfree(bh_tmp);
+		return NULL;
+	}
+
+	if (buffer_new(bh_tmp)) {
 		memset(bh->b_data, 0, dir->i_sb->s_blocksize);
 		mark_buffer_dirty(bh);
 	}
+	kfree(bh_tmp);
 	return bh;
 }
 
@@ -503,6 +515,7 @@ void obsidianfs_truncate_blocks(struct inode *inode)
 	__le32 *ind_blocks, *dind_blocks;
 	int i, j;
 
+	mutex_lock(&oi->i_lock);
 	for (i = 0; i < NDIR_BLOCKS; i++) {
 		if (oi->i_data[i]) {
 			obsidianfs_free_blocks(inode, le32_to_cpu(oi->i_data[i]), 1);
@@ -548,10 +561,11 @@ void obsidianfs_truncate_blocks(struct inode *inode)
 		oi->i_data[OBSIDIAN_DIND_BLOCK] = 0;
 	}
 
-	/* Triple-indirect not implemented — files this large not expected */
+	// Triple-indirect not implemented for the moment, not useful for the moment. 
 
 	inode->i_size   = 0;
 	inode->i_blocks = 0;
+	mutex_unlock(&oi->i_lock);
 	mark_inode_dirty(inode);
 }
 
@@ -593,6 +607,7 @@ static int obsidianfs_hardlink(struct dentry *old_dentry, struct inode *dir, str
 	inc_nlink(inode);
 	igrab(inode);
 	d_instantiate(dentry, inode);
+	mark_inode_dirty(inode);
 	mark_inode_dirty(dir);
 	return 0;
 }
@@ -663,6 +678,172 @@ static int obsidianfs_unlink(struct inode *dir, struct dentry *dentry)
 	return 0;
 }
 
+// ETUDIER CE BLOC DE CODE 
+static void obsidianfs_truncate_partial(struct inode *inode)
+{
+	struct super_block *sb = inode->i_sb;
+	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
+	unsigned long ptrs = ADDR_PER_BLOCK(sb);
+	/* First block index that must be freed; keep blocks 0 .. first-1 */
+	unsigned long first = (inode->i_size + sb->s_blocksize - 1) >>
+			       sb->s_blocksize_bits;
+	unsigned long i, j;
+	struct buffer_head *ind_bh, *dind_bh;
+	__le32 *ind_data, *dind_data;
+
+	mutex_lock(&oi->i_lock);
+
+	/* 1. Direct blocks */
+	for (i = first; i < NDIR_BLOCKS; i++) {
+		if (oi->i_data[i]) {
+			obsidianfs_free_blocks(inode, le32_to_cpu(oi->i_data[i]), 1);
+			oi->i_data[i] = 0;
+		}
+	}
+
+	/* 2. Single-indirect block: covers logical blocks [NDIR .. NDIR+ptrs) */
+	if (oi->i_data[OBSIDIAN_IND_BLOCK]) {
+		long ind_start = (long)first - NDIR_BLOCKS;
+
+		if (ind_start <= 0) {
+			/* Free all data blocks and the indirect block itself */
+			ind_bh = sb_bread(sb, le32_to_cpu(oi->i_data[OBSIDIAN_IND_BLOCK]));
+			if (ind_bh) {
+				ind_data = (__le32 *)ind_bh->b_data;
+				for (i = 0; i < ptrs; i++)
+					if (ind_data[i])
+						obsidianfs_free_blocks(inode, le32_to_cpu(ind_data[i]), 1);
+				brelse(ind_bh);
+			}
+			obsidianfs_free_blocks(inode, le32_to_cpu(oi->i_data[OBSIDIAN_IND_BLOCK]), 1);
+			oi->i_data[OBSIDIAN_IND_BLOCK] = 0;
+		} else if ((unsigned long)ind_start < ptrs) {
+			/* Partial: free entries [ind_start .. ptrs) */
+			bool all_gone = true;
+
+			ind_bh = sb_bread(sb, le32_to_cpu(oi->i_data[OBSIDIAN_IND_BLOCK]));
+			if (ind_bh) {
+				ind_data = (__le32 *)ind_bh->b_data;
+				for (i = 0; i < ptrs; i++) {
+					if (i >= (unsigned long)ind_start && ind_data[i]) {
+						obsidianfs_free_blocks(inode, le32_to_cpu(ind_data[i]), 1);
+						ind_data[i] = 0;
+					}
+					if (ind_data[i])
+						all_gone = false;
+				}
+				mark_buffer_dirty(ind_bh);
+				brelse(ind_bh);
+			}
+			if (all_gone) {
+				obsidianfs_free_blocks(inode, le32_to_cpu(oi->i_data[OBSIDIAN_IND_BLOCK]), 1);
+				oi->i_data[OBSIDIAN_IND_BLOCK] = 0;
+			}
+		}
+		/* ind_start >= ptrs: nothing to free */
+	}
+
+	/* 3. Double-indirect block: covers logical blocks [NDIR+ptrs .. NDIR+ptrs+ptrs²) */
+	if (oi->i_data[OBSIDIAN_DIND_BLOCK]) {
+		long dind_start = (long)first - NDIR_BLOCKS - (long)ptrs;
+
+		if (dind_start <= 0) {
+			/* Free everything under the dind block */
+			dind_bh = sb_bread(sb, le32_to_cpu(oi->i_data[OBSIDIAN_DIND_BLOCK]));
+			if (dind_bh) {
+				dind_data = (__le32 *)dind_bh->b_data;
+				for (i = 0; i < ptrs; i++) {
+					if (!dind_data[i])
+						continue;
+					ind_bh = sb_bread(sb, le32_to_cpu(dind_data[i]));
+					if (ind_bh) {
+						ind_data = (__le32 *)ind_bh->b_data;
+						for (j = 0; j < ptrs; j++)
+							if (ind_data[j])
+								obsidianfs_free_blocks(inode, le32_to_cpu(ind_data[j]), 1);
+						brelse(ind_bh);
+					}
+					obsidianfs_free_blocks(inode, le32_to_cpu(dind_data[i]), 1);
+				}
+				brelse(dind_bh);
+			}
+			obsidianfs_free_blocks(inode, le32_to_cpu(oi->i_data[OBSIDIAN_DIND_BLOCK]), 1);
+			oi->i_data[OBSIDIAN_DIND_BLOCK] = 0;
+		} else if ((unsigned long)dind_start < ptrs * ptrs) {
+			/* Partial: first dind entry to touch */
+			unsigned long di      = dind_start / ptrs;
+			unsigned long di_off  = dind_start % ptrs;
+			bool dind_all_gone    = true;
+
+			dind_bh = sb_bread(sb, le32_to_cpu(oi->i_data[OBSIDIAN_DIND_BLOCK]));
+			if (dind_bh) {
+				dind_data = (__le32 *)dind_bh->b_data;
+				for (i = 0; i < ptrs; i++) {
+					if (!dind_data[i]) {
+						continue;
+					}
+					if (i < di) {
+						dind_all_gone = false;
+						continue;
+					}
+					if (i == di && di_off > 0) {
+						/* Partially free this indirect block */
+						bool ind_all_gone = true;
+
+						ind_bh = sb_bread(sb, le32_to_cpu(dind_data[i]));
+						if (ind_bh) {
+							ind_data = (__le32 *)ind_bh->b_data;
+							for (j = 0; j < ptrs; j++) {
+								if (j >= di_off && ind_data[j]) {
+									obsidianfs_free_blocks(inode, le32_to_cpu(ind_data[j]), 1);
+									ind_data[j] = 0;
+								}
+								if (ind_data[j])
+									ind_all_gone = false;
+							}
+							mark_buffer_dirty(ind_bh);
+							brelse(ind_bh);
+						}
+						if (ind_all_gone) {
+							obsidianfs_free_blocks(inode, le32_to_cpu(dind_data[i]), 1);
+							dind_data[i] = 0;
+						} else {
+							dind_all_gone = false;
+						}
+					} else {
+						/* i > di: free entire indirect block */
+						ind_bh = sb_bread(sb, le32_to_cpu(dind_data[i]));
+						if (ind_bh) {
+							ind_data = (__le32 *)ind_bh->b_data;
+							for (j = 0; j < ptrs; j++)
+								if (ind_data[j])
+									obsidianfs_free_blocks(inode, le32_to_cpu(ind_data[j]), 1);
+							brelse(ind_bh);
+						}
+						obsidianfs_free_blocks(inode, le32_to_cpu(dind_data[i]), 1);
+						dind_data[i] = 0;
+					}
+				}
+				mark_buffer_dirty(dind_bh);
+				brelse(dind_bh);
+			}
+			if (dind_all_gone) {
+				obsidianfs_free_blocks(inode, le32_to_cpu(oi->i_data[OBSIDIAN_DIND_BLOCK]), 1);
+				oi->i_data[OBSIDIAN_DIND_BLOCK] = 0;
+			}
+		}
+		/* dind_start >= ptrs²: nothing to free */
+	}
+
+	/* Triple-indirect not implemented; large files not truncated partially */
+
+	if (inode->i_size < oi->valid_size)
+		oi->valid_size = inode->i_size;
+
+	mutex_unlock(&oi->i_lock);
+	mark_inode_dirty(inode);
+}
+
 /*
  * obsidianfs_setattr - Set file attributes
  * @idmap: the mount ID map
@@ -685,8 +866,13 @@ static int obsidian_setattr(struct mnt_idmap *idmap, struct dentry *dentry, stru
 	if (error)
 		return error;
 
-	if (iattr->ia_valid & ATTR_SIZE)
+	if (iattr->ia_valid & ATTR_SIZE) {
+		loff_t old_size = inode->i_size;
+
 		truncate_setsize(inode, iattr->ia_size);
+		if (iattr->ia_size < old_size)
+			obsidianfs_truncate_partial(inode);
+	}
 	setattr_copy(idmap, inode, iattr);
 	mark_inode_dirty(inode);
 	return 0;

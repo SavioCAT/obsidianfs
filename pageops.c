@@ -19,7 +19,7 @@
 /* ------------------------------------------------------------------ */
 
 int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create);
-static int obsidianfs_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create);
+static noinline int obsidianfs_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create);
 static int obsidian_block_to_path(struct inode *inode, long i_block, int offsets[4], int *boundary);
 static Indirect *obsidianfs_get_branch(struct inode *inode, int depth, int *offsets, Indirect chain[4], int *err);
 static obsidianfs_fsblk_t obsidianfs_group_first_block_no(struct super_block *sb, unsigned long group_no);
@@ -81,6 +81,11 @@ int obsidian_write_end(const struct kiocb *iocb, struct address_space *mapping,
 		mutex_unlock(&oi->i_lock);
 	}
 	return ret;
+}
+
+int obsidianfs_writepages(struct address_space *mapping, struct writeback_control *wbc)
+{
+	return mpage_writepages(mapping, wbc, obsidianfs_get_block);
 }
 
 /* ------------------------------------------------------------------ */
@@ -222,7 +227,7 @@ void obsidianfs_init_block_alloc_info(struct inode *inode)
 	struct obsidianfs_block_alloc_info *block_i;
 	struct obsidianfs_reserve_window_node *rsv;
 
-	block_i = kmalloc(sizeof(*block_i), GFP_KERNEL);
+	block_i = kmalloc(sizeof(*block_i), GFP_NOFS);
 	if (!block_i)
 		return;
 
@@ -585,11 +590,18 @@ static void obsidianfs_splice_branch(struct inode *inode, long block, Indirect *
 /* Core block mapping                                                   */
 /* ------------------------------------------------------------------ */
 
-static int obsidianfs_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create)
+// Struct to save the stack => I got an alert with CONFIG_FRAME_WARN=512 on the function obsidian_get_blocks
+struct obsidianfs_get_blocks_ctx {
+	Indirect chain[4];
+	int      offsets[4];
+};
+
+static noinline int obsidianfs_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create)
 {
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
-	int offsets[4];
-	Indirect chain[4];
+	struct obsidianfs_get_blocks_ctx *ctx;
+	Indirect *chain;
+	int *offsets;
 	Indirect *partial;
 	unsigned long goal;
 	int indirect_blks;
@@ -602,9 +614,17 @@ static int obsidianfs_get_blocks(struct inode *inode, sector_t iblock, unsigned 
 	if (WARN_ON_ONCE(maxblocks == 0))
 		return -EINVAL;
 
+	ctx = kmalloc(sizeof(*ctx), GFP_NOFS);
+	if (!ctx)
+		return -ENOMEM;
+	chain   = ctx->chain;
+	offsets = ctx->offsets;
+
 	depth = obsidian_block_to_path(inode, iblock, offsets, &blocks_to_boundary);
-	if (depth == 0)
-		return -EIO;
+	if (depth == 0) {
+		err = -EIO;
+		goto out;
+	}
 
 	partial = obsidianfs_get_branch(inode, depth, offsets, chain, &err);
 
@@ -684,6 +704,8 @@ cleanup:
 	}
 	if (err > 0)
 		*bno = le32_to_cpu(chain[depth - 1].key);
+out:
+	kfree(ctx);
 	return err;
 }
 

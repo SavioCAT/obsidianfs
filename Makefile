@@ -9,7 +9,7 @@ KDIR := /lib/modules/$(shell uname -r)/build
 all: module userspace
 
 module:
-	$(MAKE) -C $(KDIR) M=$(PWD) modules
+	$(MAKE) -C $(KDIR) M=$(PWD) CONFIG_FRAME_WARN=512 modules
 
 userspace:
 	gcc obsidiancommand.c -o commandBin
@@ -25,8 +25,8 @@ load:
 	./mkfs.obsidianfs -L test ./test.img
 	sudo losetup -f test.img
 	mkdir /tmp/obsidianfs
-	echo "Look for which loop was attrbuted to obsidianfs with sudo losetup -l"
-	echo "After do this command: sudo mount -t obsidianfs_persistent /dev/loopX /tmp/obsidianfs"
+	echo "Look for which loop was attributed to obsidianfs with sudo losetup -l"
+	echo "After do this command: sudo mount -t obsidianfs /dev/loopX /tmp/obsidianfs"
 
 unload:
 	sudo umount /tmp/obsidianfs

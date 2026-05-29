@@ -51,5 +51,6 @@ struct obsidianfs_block_alloc_info {
 extern void obsidianfs_init_block_alloc_info(struct inode *inode);
 extern int  obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create);
 extern void obsidianfs_free_blocks(struct inode *inode, obsidianfs_fsblk_t block, unsigned long count);
+extern int  obsidianfs_writepages(struct address_space *mapping, struct writeback_control *wbc);
 
 #endif

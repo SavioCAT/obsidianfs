@@ -4,6 +4,7 @@
 #include <linux/mm.h>
 #include <linux/writeback.h>
 #include <linux/buffer_head.h>
+#include <linux/splice.h>
 #include "inode.h"
 #include "file.h"
 #include "pageops.h"
@@ -15,6 +16,7 @@
 
 const struct address_space_operations obsidianfs_page_ops = {
 	.read_folio       = obsidian_read_folio,
+	.writepages       = obsidianfs_writepages,
 	.write_begin      = obsidian_write_begin,
 	.write_end        = obsidian_write_end,
 	.dirty_folio      = block_dirty_folio,
@@ -42,7 +44,7 @@ int obsidianfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *
 	}
 
 	d_instantiate(dentry, inode);
-	dget(dentry);
+	mark_inode_dirty(inode);
 	inode_set_mtime_to_ts(dir, inode_set_ctime_current(dir));
 	mark_inode_dirty(dir);
 	return 0;
@@ -86,12 +88,19 @@ static ssize_t obsidian_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	return ret;
 }
 
+static ssize_t obsidianfs_copy_file_range(struct file *file_in, loff_t pos_in, struct file *file_out, loff_t pos_out, size_t len, unsigned int flags)
+{
+	return splice_file_range(file_in, &pos_in, file_out, &pos_out, len);
+}
+
 const struct file_operations obsidianfs_file_ops = {
-	.read_iter      = generic_file_read_iter,
-	.write_iter     = obsidian_write_iter,
-	.mmap           = generic_file_mmap,
-	.fsync          = noop_fsync,
-	.llseek         = generic_file_llseek,
-	.splice_read    = filemap_splice_read,
-	.unlocked_ioctl = obsidianfs_ioctl,
+	.read_iter       = generic_file_read_iter,
+	.write_iter      = obsidian_write_iter,
+	.mmap            = generic_file_mmap,
+	.fsync           = generic_file_fsync,
+	.llseek          = generic_file_llseek,
+	.splice_read     = filemap_splice_read,
+	.splice_write    = iter_file_splice_write,
+	.unlocked_ioctl  = obsidianfs_ioctl,
+	.copy_file_range = obsidianfs_copy_file_range,
 };

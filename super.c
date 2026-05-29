@@ -36,6 +36,7 @@ static void obsidianfs_i_init_once(void *foo)
 
 	mutex_init(&oi->i_lock);
 	rwlock_init(&oi->readwritelock);
+	oi->i_block_alloc_info = NULL;
 	inode_init_once(&oi->vfs_inode);
 }
 
@@ -77,6 +78,8 @@ static int obsidianfs_write_inode(struct inode *inode, struct writeback_control 
 
 	raw = (struct obsidianfs_inode *)(bh->b_data + offset); // Representation of the inode on the disk
 
+
+
 	raw->i_mode        = cpu_to_le16(inode->i_mode);
 	raw->i_uid         = cpu_to_le32(from_kuid(inode->i_sb->s_user_ns, inode->i_uid));
 	raw->i_gid         = cpu_to_le32(from_kgid(inode->i_sb->s_user_ns, inode->i_gid));
@@ -101,12 +104,25 @@ static int obsidianfs_write_inode(struct inode *inode, struct writeback_control 
 
 static void obsidianfs_evict_inode(struct inode *inode)
 {
+	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
+
 	if (!inode->i_nlink) {
 		obsidianfs_truncate_blocks(inode);
 		obsidianfs_free_ino(inode->i_sb, inode->i_ino);
 	}
+	kfree(oi->i_block_alloc_info);
+	oi->i_block_alloc_info = NULL;
 	truncate_inode_pages_final(&inode->i_data);
 	clear_inode(inode);
+}
+
+static void obsidianfs_put_super(struct super_block *sb)
+{
+	struct obsidianfs_sb_info *sbi = OBSIDIANFS_SB(sb);
+
+	brelse(sbi->s_sbh);
+	kfree(sbi);
+	sb->s_fs_info = NULL;
 }
 
 static const struct super_operations obsidianfs_sb_ops = {
@@ -114,6 +130,7 @@ static const struct super_operations obsidianfs_sb_ops = {
 	.free_inode   = obsidianfs_free_inode,
 	.write_inode  = obsidianfs_write_inode,
 	.evict_inode  = obsidianfs_evict_inode,
+	.put_super    = obsidianfs_put_super,
 	.statfs       = simple_statfs,
 };
 
@@ -253,11 +270,11 @@ static int obsidianfs_persistent_init_fs_context(struct fs_context *fc)
 
 static void obsidianfs_persistent_kill_sb(struct super_block *sb)
 {
-	struct obsidianfs_sb_info *sbi = OBSIDIANFS_SB(sb);
+	//struct obsidianfs_sb_info *sbi = OBSIDIANFS_SB(sb);
 
 	kill_block_super(sb);
-	brelse(sbi->s_sbh);
-	kfree(sbi);
+	//brelse(sbi->s_sbh);
+	//kfree(sbi);
 }
 
 static struct file_system_type obsidianfs_persistent_type = {
