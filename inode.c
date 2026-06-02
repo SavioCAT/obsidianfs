@@ -10,10 +10,6 @@
 #include "pageops.h"
 #include "super.h"
 
-/* ------------------------------------------------------------------ */
-/* Forward declarations                                                 */
-/* ------------------------------------------------------------------ */
-
 static int obsidianfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl);
 static int obsidianfs_hardlink(struct dentry *old_dentry, struct inode *dir, struct dentry *dentry);
 static int obsidianfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, const char *symname);
@@ -23,10 +19,6 @@ static struct dentry *obsidianfs_lookup(struct inode *dir, struct dentry *dentry
 static int obsidianfs_rmdir(struct inode *dir, struct dentry *dentry);
 static int obsidianfs_readdir(struct file *file, struct dir_context *ctx);
 static int obsidianfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, struct dentry *old_dentry, struct inode *new_dir, struct dentry *new_dentry, unsigned int flags);
-
-/* ------------------------------------------------------------------ */
-/* inode_operations and file_operations tables                          */
-/* ------------------------------------------------------------------ */
 
 static const struct inode_operations obsidianfs_file_inode_ops = {
 	.setattr = obsidian_setattr,
@@ -52,17 +44,12 @@ static const struct file_operations obsidianfs_dir_ops = {
 	.fsync          = noop_fsync,
 };
 
-/* ------------------------------------------------------------------ */
-/* Read inode from disk                                               */
-/* ------------------------------------------------------------------ */
-
 /**
  * obsidianfs_iget - Read an inode from disk
  * @sb: the super block
  * @ino: the inode number
  * Returns the inode, or an error pointer on failure.
  */
-
 // DISK --> MEMORY
 struct inode *obsidianfs_iget(struct super_block *sb, unsigned long ino)
 {
@@ -161,10 +148,6 @@ bad_inode:
 	return ERR_PTR(-EIO);
 }
 
-/* ------------------------------------------------------------------ */
-/* Inode bitmap allocation                                              */
-/* ------------------------------------------------------------------ */
-
 /**
  * obsidianfs_alloc_ino - Allocate an inode number
  * @sb: the super block
@@ -259,10 +242,6 @@ void obsidianfs_free_ino(struct super_block *sb, unsigned long ino)
 	mutex_unlock(&sbi->s_lock);
 }
 
-/* ------------------------------------------------------------------ */
-/* Inode allocation                                                     */
-/* ------------------------------------------------------------------ */
-
 /*
  * obsidianfs_create_inode_memory - Create an inode in memory
  * @sb: the super block
@@ -318,10 +297,6 @@ struct inode *obsidianfs_create_inode_memory(struct super_block *sb, const struc
 	return inode;
 }
 
-/* ------------------------------------------------------------------ */
-/* Directory block I/O helper                                          */
-/* ------------------------------------------------------------------ */
-
 /*
  * obsidianfs_dir_getblk - Get a directory block
  * @dir: the directory inode
@@ -359,10 +334,6 @@ static struct buffer_head *obsidianfs_dir_getblk(struct inode *dir, sector_t lbl
 	kfree(bh_tmp);
 	return bh;
 }
-
-/* ------------------------------------------------------------------ */
-/* Directory entry operations                                          */
-/* ------------------------------------------------------------------ */
 
 /*
  * obsidianfs_add_dir_entry - Add a directory entry
@@ -499,10 +470,6 @@ int obsidianfs_remove_dir_entry(struct inode *dir, const struct qstr *qstr)
 	return -ENOENT;
 }
 
-/* ------------------------------------------------------------------ */
-/* Data block freeing                                                  */
-/* ------------------------------------------------------------------ */
-
 /*
  * obsidianfs_truncate_blocks - Truncate a file's data blocks
  * @inode: the inode to truncate
@@ -568,10 +535,6 @@ void obsidianfs_truncate_blocks(struct inode *inode)
 	mutex_unlock(&oi->i_lock);
 	mark_inode_dirty(inode);
 }
-
-/* ------------------------------------------------------------------ */
-/* Directory inode operations                                           */
-/* ------------------------------------------------------------------ */
 
 /**
  * obsidianfs_create - Create a new file
@@ -678,7 +641,6 @@ static int obsidianfs_unlink(struct inode *dir, struct dentry *dentry)
 	return 0;
 }
 
-// ETUDIER CE BLOC DE CODE 
 static void obsidianfs_truncate_partial(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
@@ -1064,10 +1026,6 @@ static int obsidianfs_rmdir(struct inode *dir, struct dentry *dentry)
 	mark_inode_dirty(dir);
 	return 0;
 }
-
-/* ------------------------------------------------------------------ */
-/* Rename                                                               */
-/* ------------------------------------------------------------------ */
 
 static int obsidianfs_rename(struct mnt_idmap *idmap,
 			      struct inode *old_dir, struct dentry *old_dentry,

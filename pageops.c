@@ -14,10 +14,6 @@
 #include "pageops.h"
 #include "super.h"
 
-/* ------------------------------------------------------------------ */
-/* Forward declarations                                               */
-/* ------------------------------------------------------------------ */
-
 int obsidianfs_get_block(struct inode *inode, sector_t iblock, struct buffer_head *bh_result, int create);
 static noinline int obsidianfs_get_blocks(struct inode *inode, sector_t iblock, unsigned long maxblocks, u32 *bno, bool *new, bool *boundary, int create);
 static int obsidian_block_to_path(struct inode *inode, long i_block, int offsets[4], int *boundary);
@@ -31,10 +27,6 @@ static int obsidianfs_alloc_blocks(struct inode *inode, obsidianfs_fsblk_t goal,
 void obsidianfs_free_blocks(struct inode *inode, obsidianfs_fsblk_t block, unsigned long count);
 static void obsidianfs_splice_branch(struct inode *inode, long block, Indirect *where, int num, int blks);
 
-/* ------------------------------------------------------------------ */
-/* Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
 static inline void add_chain(Indirect *p, struct buffer_head *bh, __le32 *v)
 {
 	p->key = *(p->p = v);
@@ -47,10 +39,6 @@ static inline int verify_chain(Indirect *from, Indirect *to)
 		from++;
 	return (from > to);
 }
-
-/* ------------------------------------------------------------------ */
-/* Page cache read/write                                              */
-/* ------------------------------------------------------------------ */
 
 int obsidian_read_folio(struct file *file, struct folio *folio)
 {
@@ -87,10 +75,6 @@ int obsidianfs_writepages(struct address_space *mapping, struct writeback_contro
 {
 	return mpage_writepages(mapping, wbc, obsidianfs_get_block);
 }
-
-/* ------------------------------------------------------------------ */
-/* Block path resolution (ext2-style indirect blocks)                 */
-/* ------------------------------------------------------------------ */
 
 /*
  * Map a logical block number to a path of indices into i_data[] and
@@ -176,10 +160,6 @@ failure:
 no_block:
 	return p;
 }
-
-/* ------------------------------------------------------------------ */
-/* Block allocation helpers                                           */
-/* ------------------------------------------------------------------ */
 
 /* TODO: requires on-disk block group layout in s_fs_info */
 static obsidianfs_fsblk_t obsidianfs_group_first_block_no(struct super_block *sb, unsigned long group_no)
@@ -326,9 +306,7 @@ failed:
  *
  * Returns the number of data blocks allocated, 0 on error (*err set).
  */
-static int obsidianfs_alloc_blocks(struct inode *inode, obsidianfs_fsblk_t goal,
-				    int indirect_blks, int blks,
-				    obsidianfs_fsblk_t new_blocks[4], int *err)
+static int obsidianfs_alloc_blocks(struct inode *inode, obsidianfs_fsblk_t goal, int indirect_blks, int blks, obsidianfs_fsblk_t new_blocks[4], int *err)
 {
 	struct super_block *sb = inode->i_sb;
 	struct obsidianfs_sb_info *sbi = OBSIDIANFS_SB(sb);
@@ -585,10 +563,6 @@ static void obsidianfs_splice_branch(struct inode *inode, long block, Indirect *
 	}
 	mark_inode_dirty(inode);
 }
-
-/* ------------------------------------------------------------------ */
-/* Core block mapping                                                   */
-/* ------------------------------------------------------------------ */
 
 // Struct to save the stack => I got an alert with CONFIG_FRAME_WARN=512 on the function obsidian_get_blocks
 struct obsidianfs_get_blocks_ctx {

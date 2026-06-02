@@ -11,17 +11,14 @@
 
 static struct kmem_cache *obsidianfs_inode_cache;
 
-/* ------------------------------------------------------------------ */
-/* Inode slab                                                          */
-/* ------------------------------------------------------------------ */
-
 static struct inode *obsidianfs_alloc_inode(struct super_block *sb)
 {
 	struct obsidianfs_inode_meta *oi;
 
 	oi = kmem_cache_alloc(obsidianfs_inode_cache, GFP_KERNEL);
-	if (!oi)
+	if (!oi) {
 		return NULL;
+	}
 	return &oi->vfs_inode;
 }
 
@@ -39,11 +36,6 @@ static void obsidianfs_i_init_once(void *foo)
 	oi->i_block_alloc_info = NULL;
 	inode_init_once(&oi->vfs_inode);
 }
-
-/* ------------------------------------------------------------------ */
-/* Superblock operations                                               */
-/* ------------------------------------------------------------------ */
-
 
 // Write all the metadata of an inode from the memory to the disk MEMORY --> DISK
 static int obsidianfs_write_inode(struct inode *inode, struct writeback_control *wbc)
@@ -71,14 +63,11 @@ static int obsidianfs_write_inode(struct inode *inode, struct writeback_control 
 
 	bh = sb_bread(inode->i_sb, block);
 	if (!bh) {
-		pr_err("[ERROR OBSIDIANFS] %s: cannot read block %lu for inode %lu\n",
-		       __func__, block, inode->i_ino);
+		pr_err("[ERROR OBSIDIANFS] %s: cannot read block %lu for inode %lu\n", __func__, block, inode->i_ino);
 		return -EIO;
 	}
 
 	raw = (struct obsidianfs_inode *)(bh->b_data + offset); // Representation of the inode on the disk
-
-
 
 	raw->i_mode        = cpu_to_le16(inode->i_mode);
 	raw->i_uid         = cpu_to_le32(from_kuid(inode->i_sb->s_user_ns, inode->i_uid));
@@ -95,8 +84,9 @@ static int obsidianfs_write_inode(struct inode *inode, struct writeback_control 
 	mark_buffer_dirty(bh);
 	if (wbc->sync_mode == WB_SYNC_ALL) {
 		sync_dirty_buffer(bh);
-		if (!buffer_uptodate(bh))
+		if (!buffer_uptodate(bh)) {
 			ret = -EIO;
+		}
 	}
 	brelse(bh);
 	return ret;
@@ -106,7 +96,7 @@ static void obsidianfs_evict_inode(struct inode *inode)
 {
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
 
-	if (!inode->i_nlink) {
+	if (!inode->i_nlink) { // If i_nlink == 0
 		obsidianfs_truncate_blocks(inode);
 		obsidianfs_free_ino(inode->i_sb, inode->i_ino);
 	}
@@ -133,10 +123,6 @@ static const struct super_operations obsidianfs_sb_ops = {
 	.put_super    = obsidianfs_put_super,
 	.statfs       = simple_statfs,
 };
-
-/* ------------------------------------------------------------------ */
-/* Persistent (block-device) mount                                    */
-/* ------------------------------------------------------------------ */
 
 static int obsidianfs_fill_super_persistent(struct super_block *sb, struct fs_context *fc)
 {
@@ -241,10 +227,6 @@ err_sbi:
 	return ret;
 }
 
-/* ------------------------------------------------------------------ */
-/* fs_context — persistent fs (block device)                           */
-/* ------------------------------------------------------------------ */
-
 static int obsidianfs_persistent_get_tree(struct fs_context *fc)
 {
 	return get_tree_bdev(fc, obsidianfs_fill_super_persistent);
@@ -283,10 +265,6 @@ static struct file_system_type obsidianfs_persistent_type = {
 	.init_fs_context = obsidianfs_persistent_init_fs_context,
 	.kill_sb         = obsidianfs_persistent_kill_sb,
 };
-
-/* ------------------------------------------------------------------ */
-/* Module init / exit                                                 */
-/* ------------------------------------------------------------------ */
 
 static int __init obsidianfs_init(void)
 {

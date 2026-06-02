@@ -10,10 +10,6 @@
 #include "pageops.h"
 #include "ioctlops.h"
 
-/* ------------------------------------------------------------------ */
-/* address_space_operations                                             */
-/* ------------------------------------------------------------------ */
-
 const struct address_space_operations obsidianfs_page_ops = {
 	.read_folio       = obsidian_read_folio,
 	.writepages       = obsidianfs_writepages,
@@ -22,10 +18,6 @@ const struct address_space_operations obsidianfs_page_ops = {
 	.dirty_folio      = block_dirty_folio,
 	.invalidate_folio = block_invalidate_folio,
 };
-
-/* ------------------------------------------------------------------ */
-/* Directory operations                                                 */
-/* ------------------------------------------------------------------ */
 
 int obsidianfs_mknod(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, dev_t dev)
 {
@@ -59,10 +51,6 @@ struct dentry *obsidianfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, stru
 	inc_nlink(dir);
 	return NULL;
 }
-
-/* ------------------------------------------------------------------ */
-/* File operations                                                      */
-/* ------------------------------------------------------------------ */
 
 static ssize_t obsidian_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {

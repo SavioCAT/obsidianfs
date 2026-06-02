@@ -89,10 +89,12 @@ static int write_blocks(int fd, uint32_t blk_no, uint32_t blk_size, uint32_t cou
 static void read_uuid(uint8_t uuid[16])
 {
 	int rfd = open("/dev/urandom", O_RDONLY);
-	if (rfd < 0 || read(rfd, uuid, 16) != 16)
+	if (rfd < 0 || read(rfd, uuid, 16) != 16) {
 		memset(uuid, 0, 16);
-	if (rfd >= 0)
+	}
+	if (rfd >= 0) {
 		close(rfd);
+	}
 }
 
 static void usage(const char *prog)
@@ -108,8 +110,8 @@ static void usage(const char *prog)
 
 int main(int argc, char *argv[])
 {
-	uint32_t    block_size   = 4096;  // Max block size on x86_64 is PAGE_SIZE (4096); 8192 causes sb_set_blocksize to fail
-	uint32_t    inodes_count = 8u * block_size * OBSIDIANFS_INODE_BITMAP_SIZE;
+	uint32_t    block_size   = 4096;
+	uint32_t    inodes_count = 8u * block_size * OBSIDIANFS_INODE_BITMAP_SIZE; // 8u because there is 8 bits for each byte, 
 	const char *volume_label = "";
 	const char *device       = NULL;
 	int opt, rc = 0;
@@ -154,7 +156,6 @@ int main(int argc, char *argv[])
 	uint32_t inode_table_blks = (inodes_count + inodes_per_block - 1) / inodes_per_block;
 	uint32_t first_data_block = OBSIDIANFS_INODE_TABLE_BLOCK + inode_table_blks;
 
-	/* s_log_block_size: block_size = 1024 << s_log_block_size */
 	uint32_t log_block_size = 0;
 	{
 		uint32_t bs = block_size;
@@ -257,8 +258,8 @@ int main(int argc, char *argv[])
 
 	/* ---- Blocks 3..first_data_block-1: Inode table ---- */
 	{
-		size_t  tblsz     = (size_t)inode_table_blks * block_size;
-		uint8_t *itable   = calloc(1, tblsz);
+		size_t  tblsz     = (size_t)inode_table_blks * block_size; //size in bytes of the inode table
+		uint8_t *itable   = calloc(1, tblsz); //allocation of the table
 		
 		if (!itable) { 
 			perror("calloc"); 
@@ -267,7 +268,7 @@ int main(int argc, char *argv[])
 		}
 
 		// Root inode
-		// Is the inode corresponding to / in the file system
+		// It's the inode corresponding to / in the file system
 		// Set as a directory in order to carry every other element of the system.
 
 		struct obsidianfs_inode root;
