@@ -21,6 +21,7 @@ long obsidianfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
         case OBSIDIAN_IOC_PROTECT:
             oi->flagsProtected = true;
+            mark_inode_dirty(inode);
             pr_info("[OBSIDIANFS] inode %lu protected\n", inode->i_ino);
             return 0;
 
