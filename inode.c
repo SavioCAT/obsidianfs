@@ -118,6 +118,8 @@ struct inode *obsidianfs_iget(struct super_block *sb, unsigned long ino)
 	oi->valid_size     = inode->i_size;
 	oi->flagsProtected = raw->i_flagsProtected ? true : false;
 	oi->i_block_group  = 0;
+	oi->i_next_inode = raw->i_next_inode;
+        oi->i_previous_inode = raw->i_previous_inode;
 
 	brelse(bh);
 
@@ -1027,10 +1029,7 @@ static int obsidianfs_rmdir(struct inode *dir, struct dentry *dentry)
 	return 0;
 }
 
-static int obsidianfs_rename(struct mnt_idmap *idmap,
-			      struct inode *old_dir, struct dentry *old_dentry,
-			      struct inode *new_dir, struct dentry *new_dentry,
-			      unsigned int flags)
+static int obsidianfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, struct dentry *old_dentry, struct inode *new_dir, struct dentry *new_dentry, unsigned int flags)
 {
 	struct inode *old_inode = d_inode(old_dentry);
 	struct inode *new_inode = d_inode(new_dentry);

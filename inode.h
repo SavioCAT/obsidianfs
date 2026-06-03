@@ -19,7 +19,9 @@ struct obsidianfs_inode {
 	__le32	i_generation;		/* File version (NFS) */
 	__le32	i_block[OBSIDIAN_N_BLOCKS]; /* Block pointers */
 	__u8	i_flagsProtected;	/* Flag for the file protection */
-	__u8	i_reserved[19];		/* Reserved — pad to 128 bytes */
+	__le32	i_next_inode;		// For the inode chain (CoW)
+	__le32	i_previous_inode;	// For the inode chain (CoW)
+	__u8	i_reserved[11];		/* Reserved — pad to 128 bytes */
 };
 
 #ifdef __KERNEL__
@@ -42,6 +44,8 @@ struct obsidianfs_inode_meta {
 	struct obsidianfs_block_alloc_info *i_block_alloc_info;
 	__le32        i_data[OBSIDIAN_N_BLOCKS]; /* mirrors obsidianfs_inode.i_block */
 	__u32         i_block_group;
+	__le32	      i_next_inode;
+	__le32	      i_previous_inode;
 };
 
 static inline struct obsidianfs_inode_meta *OBSIDIANFS_INODE(struct inode *inode)

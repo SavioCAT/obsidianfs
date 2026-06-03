@@ -57,6 +57,7 @@ static ssize_t obsidian_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct file *file   = iocb->ki_filp;
 	struct inode *inode = file->f_mapping->host;
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
+	struct dentry *dentry_modification = file_dentry(file);
 	ssize_t ret;
 
 	if (oi->flagsProtected) {

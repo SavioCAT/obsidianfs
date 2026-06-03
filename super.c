@@ -79,6 +79,8 @@ static int obsidianfs_write_inode(struct inode *inode, struct writeback_control 
 	raw->i_ctime       = cpu_to_le32(inode_get_ctime_sec(inode));
 	raw->i_mtime       = cpu_to_le32(inode_get_mtime_sec(inode));
 	raw->i_flagsProtected = oi->flagsProtected ? 1 : 0;
+	raw->i_next_inode = cpu_to_le32(oi->i_next_inode);
+	raw->i_previous_inode = cpu_to_le32(oi->i_previous_inode);
 	memcpy(raw->i_block, oi->i_data, sizeof(raw->i_block));
 
 	mark_buffer_dirty(bh);
