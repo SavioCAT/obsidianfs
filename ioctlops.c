@@ -3,6 +3,7 @@
 #include <linux/mm.h>
 #include <linux/err.h>
 #include <linux/ioctl.h>
+#include <linux/dcache.h>
 #include "ioctlops.h"
 #include "inode.h"
 
@@ -10,6 +11,8 @@ long obsidianfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct inode *inode = file_inode(file);
     struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
+    //struct dentry *dentry = file->f_path.dentry;
+    //struct super_block *sb = inode->i_sb;
 
     pr_info("[OBSIDIANFS] ioctl cmd=0x%x on inode %lu\n", cmd, inode->i_ino);
 
@@ -26,13 +29,25 @@ long obsidianfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
                 return -EFAULT;
             return 0;
         }
-        case OBSIDIAN_IOC_REVERT {
+        case OBSIDIAN_IOC_REVERT: {
             // WIP REVERT INODE
             return 0;
         }
-        case OBSIDIAN_IOC_FORWARD {
+        case OBSIDIAN_IOC_FORWARD: {
             // WIP FORWARD INODE
             return 0;
+        }
+        case OBSIDIAN_IOC_DENTRY_TEST: {
+        	struct hlist_node *p;
+        	
+        	spin_lock(&inode->i_lock);
+        	hlist_for_each(p, &inode->i_dentry) {
+        		struct dentry *dentry_test = container_of(p, struct dentry, d_u.d_alias);
+        		pr_err("[OBSIDIANFS] alias found: %s\n", dentry_test->d_name.name);
+    		}
+        	spin_unlock(&inode->i_lock);
+        	
+        	return 0;
         }
         default:
             return -ENOTTY;  /* std error for unknow IOCTL */

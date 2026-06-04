@@ -19,20 +19,20 @@
 #define OBSIDIANFS_INODE_SIZE         128u
 
 struct __attribute__((packed)) obsidianfs_super_block {
-	uint32_t s_magic;				// 4
+	uint32_t s_magic;			// 4
 	uint32_t s_blocks_count;		// 4
 	uint32_t s_inodes_count;		// 4
-	uint32_t s_free_blocks_count;   // 4
-	uint32_t s_free_inodes_count;   // 4
-	uint32_t s_first_data_block;	// 4
+	uint32_t s_free_blocks_count;   	// 4
+	uint32_t s_free_inodes_count;   	// 4
+	uint32_t s_first_data_block;		// 4
 	uint32_t s_log_block_size;		// 4
 	uint32_t s_inode_size;			// 4
-	uint32_t s_mtime;				// 4
-	uint32_t s_wtime;				// 4
+	uint32_t s_mtime;			// 4
+	uint32_t s_wtime;			// 4
 	uint8_t  s_uuid[16];			// 16 
 	char     s_volume_name[16];		// 16
 	uint8_t  s_padding[4024];		// 4024 => In order to use all the block size
-									// SUM = 4096 bytes
+						// SUM = 4096 bytes
 };
 
 
