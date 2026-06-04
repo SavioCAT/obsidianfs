@@ -5,3 +5,4 @@ obsidianfs.ko
 obsidianfs.mod  
 obsidianfs.mod.c
 test.img
+*.swp

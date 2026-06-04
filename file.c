@@ -57,12 +57,32 @@ static ssize_t obsidian_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct file *file   = iocb->ki_filp;
 	struct inode *inode = file->f_mapping->host;
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
-	struct dentry *dentry_modification = file_dentry(file);
+	struct dentry *dentry = file_dentry(file);
 	ssize_t ret;
 
 	if (oi->flagsProtected) {
 		pr_err("[ERROR OBSIDIANFS] %s: file is protected\n", __func__);
 		return -EPERM;
+	}
+
+	// CoW, If there is something in the file, write the modification in a new inode
+	if (inode->i_size > 0) {
+		struct inode *new_inode = obsidianfs_cow_inode(inode, dentry);
+
+		if (IS_ERR(new_inode)) {
+			return PTR_ERR(new_inode);
+		}
+
+		oi->flagsProtected = true; // Protect the old inode
+		mark_inode_dirty(inode);
+		
+		get_write_access(new_inode);
+		put_write_access(inode);
+
+		// Redirect to the new inode
+		file->f_inode   = new_inode;
+		file->f_mapping = &new_inode->i_data;
+		inode = new_inode;
 	}
 
 	inode_lock(inode);

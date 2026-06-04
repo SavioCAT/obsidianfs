@@ -60,6 +60,7 @@ extern void          obsidianfs_free_ino(struct super_block *sb, unsigned long i
 extern int           obsidianfs_add_dir_entry(struct inode *dir, const struct qstr *qstr, unsigned long ino);
 extern int           obsidianfs_remove_dir_entry(struct inode *dir, const struct qstr *qstr);
 extern void          obsidianfs_truncate_blocks(struct inode *inode);
+extern struct inode *obsidianfs_cow_inode(struct inode *inode, struct dentry *dentry);
 
 /* on-disk directory entry */
 #define OBSIDIANFS_MAX_NAME_LEN    255

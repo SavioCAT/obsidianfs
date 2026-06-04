@@ -263,8 +263,10 @@ struct inode *obsidianfs_create_inode_memory(struct super_block *sb, const struc
 	}
 
 	oi = OBSIDIANFS_INODE(inode);
-	oi->flagsProtected = false;
-	oi->valid_size     = 0;
+	oi->flagsProtected   = false;
+	oi->valid_size       = 0;
+	oi->i_next_inode     = 0;
+	oi->i_previous_inode = 0;
 
 	inode->i_ino = obsidianfs_alloc_ino(sb);
 	if (!inode->i_ino) {
@@ -472,6 +474,49 @@ int obsidianfs_remove_dir_entry(struct inode *dir, const struct qstr *qstr)
 	return -ENOENT;
 }
 
+// Update the dentry inode id to a new inode, useful for CoW
+static int obsidianfs_update_dir_entry(struct inode *dir, const struct qstr *qstr, unsigned long new_ino)
+{
+	struct super_block *sb = dir->i_sb;
+	unsigned long blksize  = sb->s_blocksize;
+	unsigned long nblocks  = (dir->i_size + blksize - 1) >> sb->s_blocksize_bits;
+	unsigned long blk;
+
+	for (blk = 0; blk < nblocks; blk++) {
+		struct buffer_head *bh;
+		struct obsidianfs_dir_entry *de;
+		char *base, *end;
+
+		bh = obsidianfs_dir_getblk(dir, blk, 0);
+		if (!bh)
+			return -EIO;
+
+		base = bh->b_data;
+		end  = base + blksize;
+		de   = (struct obsidianfs_dir_entry *)base;
+
+		while ((char *)de < end) {
+			unsigned int rec_len = le16_to_cpu(de->rec_len);
+
+			if (!rec_len || rec_len > (unsigned int)(end - (char *)de)) {
+				brelse(bh);
+				return -EIO;
+			}
+			if (le32_to_cpu(de->ino) &&
+			    de->name_len == qstr->len &&
+			    memcmp(de->name, qstr->name, qstr->len) == 0) {
+				de->ino = cpu_to_le32(new_ino);
+				mark_buffer_dirty(bh);
+				brelse(bh);
+				return 0;
+			}
+			de = (struct obsidianfs_dir_entry *)((char *)de + rec_len);
+		}
+		brelse(bh);
+	}
+	return -ENOENT;
+}
+
 /*
  * obsidianfs_truncate_blocks - Truncate a file's data blocks
  * @inode: the inode to truncate
@@ -536,6 +581,124 @@ void obsidianfs_truncate_blocks(struct inode *inode)
 	inode->i_blocks = 0;
 	mutex_unlock(&oi->i_lock);
 	mark_inode_dirty(inode);
+}
+
+// Copy evry block from an old inode to a new inode
+static int obsidianfs_copy_blocks(struct inode *old_inode, struct inode *new_inode)
+{
+	struct super_block *sb = old_inode->i_sb;
+	unsigned long blocksize = sb->s_blocksize;
+	unsigned long nblocks;
+	unsigned long lblock;
+
+	if (old_inode->i_size == 0)
+		return 0;
+
+	nblocks = (old_inode->i_size + blocksize - 1) >> sb->s_blocksize_bits;
+
+	for (lblock = 0; lblock < nblocks; lblock++) {
+		struct buffer_head *bh_tmp;
+		struct buffer_head *bh_src, *bh_dst;
+		sector_t old_pblock, new_pblock;
+		int err;
+
+		/* Trouver le bloc physique source */
+		bh_tmp = kzalloc(sizeof(*bh_tmp), GFP_NOFS);
+		if (!bh_tmp) {
+			return -ENOMEM;
+		}
+		bh_tmp->b_size = blocksize;
+		err = obsidianfs_get_block(old_inode, lblock, bh_tmp, 0);
+		if (err || !buffer_mapped(bh_tmp)) {
+			kfree(bh_tmp);
+			continue; /* bloc sparse, on saute */
+		}
+		old_pblock = bh_tmp->b_blocknr;
+		kfree(bh_tmp);
+
+		/* Allouer le nouveau bloc physique sur new_inode */
+		bh_tmp = kzalloc(sizeof(*bh_tmp), GFP_NOFS);
+		if (!bh_tmp) {
+			return -ENOMEM;
+		}
+		bh_tmp->b_size = blocksize;
+		err = obsidianfs_get_block(new_inode, lblock, bh_tmp, 1);
+		if (err || !buffer_mapped(bh_tmp)) {
+			kfree(bh_tmp);
+			return err ? err : -EIO;
+		}
+		new_pblock = bh_tmp->b_blocknr;
+		kfree(bh_tmp);
+
+		/* Copier le contenu */
+		bh_src = sb_bread(sb, old_pblock);
+		if (!bh_src)
+			return -EIO;
+		bh_dst = sb_getblk(sb, new_pblock);
+		if (!bh_dst) {
+			brelse(bh_src);
+			return -ENOMEM;
+		}
+		memcpy(bh_dst->b_data, bh_src->b_data, blocksize);
+		set_buffer_uptodate(bh_dst);
+		mark_buffer_dirty(bh_dst);
+		brelse(bh_dst);
+		brelse(bh_src);
+	}
+	return 0;
+}
+
+// Create a new inode, exactly like the previous inode. Useful for CoW
+struct inode *obsidianfs_cow_inode(struct inode *old_inode, struct dentry *dentry)
+{
+	struct super_block *sb = old_inode->i_sb;
+	struct obsidianfs_inode_meta *old_oi = OBSIDIANFS_INODE(old_inode);
+	struct inode *new_inode;
+	struct obsidianfs_inode_meta *new_oi;
+	int ret;
+
+	/* Vider le page cache sur disque pour que les blocs source soient à jour */
+	ret = filemap_write_and_wait(old_inode->i_mapping);
+	if (ret) {
+		return ERR_PTR(ret);
+	}
+
+	new_inode = obsidianfs_create_inode_memory(sb, old_inode, old_inode->i_mode, 0);
+	if (!new_inode) {
+		return ERR_PTR(-ENOSPC);
+	}
+
+	new_oi = OBSIDIANFS_INODE(new_inode);
+	new_inode->i_uid       = old_inode->i_uid;
+	new_inode->i_gid       = old_inode->i_gid;
+	new_inode->i_size      = old_inode->i_size;
+	new_oi->valid_size     = old_oi->valid_size;
+	new_oi->flagsProtected = old_oi->flagsProtected;
+
+	ret = obsidianfs_copy_blocks(old_inode, new_inode);
+	if (ret) {
+		iput(new_inode);
+		return ERR_PTR(ret);
+	}
+
+	new_inode->i_blocks      = old_inode->i_blocks;
+	new_oi->i_previous_inode = cpu_to_le32(old_inode->i_ino);
+	new_oi->i_next_inode     = 0;
+	old_oi->i_next_inode     = cpu_to_le32(new_inode->i_ino);
+
+	ret = obsidianfs_update_dir_entry(d_inode(dentry->d_parent), &dentry->d_name, new_inode->i_ino);
+	if (ret) {
+		old_oi->i_next_inode = 0;
+		iput(new_inode);
+		return ERR_PTR(ret);
+	}
+
+	/* Invalider le dentry pour forcer un re-lookup au prochain accès */
+	d_drop(dentry);
+
+	mark_inode_dirty(old_inode);
+	mark_inode_dirty(new_inode);
+	return new_inode;
 }
 
 /**
@@ -824,6 +987,26 @@ static int obsidian_setattr(struct mnt_idmap *idmap, struct dentry *dentry, stru
 	if (oi->flagsProtected) {
 		pr_err("[ERROR OBSIDIANFS] %s: file is protected\n", __func__);
 		return -EPERM;
+	}
+
+	if ((iattr->ia_valid & ATTR_FILE) && inode->i_size > 0) {
+		struct inode *old_inode = inode;
+		struct inode *new_inode = obsidianfs_cow_inode(inode, dentry);
+
+		if (IS_ERR(new_inode)) {
+			return PTR_ERR(new_inode);
+		}
+
+		oi->flagsProtected = true;
+		mark_inode_dirty(old_inode);
+
+		/* Transférer le write access et rediriger le file descriptor */
+		get_write_access(new_inode);
+		put_write_access(old_inode);
+		iattr->ia_file->f_inode   = new_inode;
+		iattr->ia_file->f_mapping = &new_inode->i_data;
+
+		inode = new_inode;
 	}
 
 	error = setattr_prepare(idmap, dentry, iattr);
