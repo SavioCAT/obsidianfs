@@ -31,24 +31,43 @@ long obsidianfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
         }
         case OBSIDIAN_IOC_REVERT: {
             struct hlist_node *p;
-            unsigned long prev_ino = le32_to_cpu(oi->i_previous_inode);
+            unsigned long prev_ino = oi->i_previous_inode;
+            unsigned short count_dentry = 0;
+
             if (prev_ino == 0) {
             	pr_err("[OBSIDIANFS] revert: no previous inode for ino %lu\n", inode->i_ino);
-		return -EINVAL;
+		        return -EINVAL;
             }
-        	
+
             spin_lock(&inode->i_lock);
             hlist_for_each(p, &inode->i_dentry) {
-        	struct dentry *dentry_rollback = container_of(p, struct dentry, d_u.d_alias);
-        	obsidianfs_update_dir_entry(d_inode(dentry_rollback->d_parent), &dentry_rollback->d_name, prev_ino);
-        	d_drop(dentry_rollback);
-                dput(dentry_rollback);
+        	    count_dentry++; // Counter of dentry pointing to the inode
     	    }
-    	    spin_unlock(&inode->i_lock);
-    	    
+
+            struct dentry **dentry_list = kcalloc(count_dentry, sizeof(struct dentry *), GFP_ATOMIC);
+            if (!dentry_list) {
+                spin_unlock(&inode->i_lock);
+                return -ENOMEM;
+            }
+
+            unsigned short i = 0;
+            hlist_for_each(p, &inode->i_dentry) {
+        	    dentry_list[i] = container_of(p, struct dentry, d_u.d_alias);
+                dget(dentry_list[i]);
+                i++;
+    	    }
+            spin_unlock(&inode->i_lock);
+
+            for (short j = 0; j < count_dentry; j++) {
+                obsidianfs_update_dir_entry(d_inode(dentry_list[j]->d_parent), &dentry_list[j]->d_name, prev_ino);
+                d_drop(dentry_list[j]);
+                dput(dentry_list[j]);
+            }
+
+            kfree(dentry_list);
     	    drop_nlink(inode);
             mark_inode_dirty(inode);
-    	    
+
             return 0;
         }
         case OBSIDIAN_IOC_FORWARD: {
