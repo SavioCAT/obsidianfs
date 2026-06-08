@@ -30,7 +30,25 @@ long obsidianfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             return 0;
         }
         case OBSIDIAN_IOC_REVERT: {
-            // WIP REVERT INODE
+            struct hlist_node *p;
+            unsigned long prev_ino = le32_to_cpu(oi->i_previous_inode);
+            if (prev_ino == 0) {
+            	pr_err("[OBSIDIANFS] revert: no previous inode for ino %lu\n", inode->i_ino);
+		return -EINVAL;
+            }
+        	
+            spin_lock(&inode->i_lock);
+            hlist_for_each(p, &inode->i_dentry) {
+        	struct dentry *dentry_rollback = container_of(p, struct dentry, d_u.d_alias);
+        	obsidianfs_update_dir_entry(d_inode(dentry_rollback->d_parent), &dentry_rollback->d_name, prev_ino);
+        	d_drop(dentry_rollback);
+                dput(dentry_rollback);
+    	    }
+    	    spin_unlock(&inode->i_lock);
+    	    
+    	    drop_nlink(inode);
+            mark_inode_dirty(inode);
+    	    
             return 0;
         }
         case OBSIDIAN_IOC_FORWARD: {

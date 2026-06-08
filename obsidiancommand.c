@@ -12,7 +12,7 @@ int main(int argc, char *argv[])
     int fd, ret;
 
     if (argc != 3) {
-        fprintf(stderr, "Usage: %s <-p|-l> <file>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <protect|listdentry|rollback> <file>\n", argv[0]);
         return 1;
     }
 
@@ -22,22 +22,39 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if (strcmp(argv[1], "-p") == 0) {
+    if (strcmp(argv[1], "protect") == 0) 
+    {
         ret = ioctl(fd, OBSIDIAN_IOC_PROTECT);
-        if (ret < 0) {
+        if (ret < 0) 
+        {
             fprintf(stderr, "Error ioctl PROTECT: %s\n", strerror(errno));
             close(fd);
             return 1;
         }
         printf("inode protected\n");
-    } else if (strcmp(argv[1], "-l") == 0) {
+    } 
+    else if (strcmp(argv[1], "listdentry") == 0) 
+    {
         ret = ioctl(fd, OBSIDIAN_IOC_DENTRY_TEST);
-        if (ret < 0) {
+        if (ret < 0) 
+        {
             fprintf(stderr, "Error ioctl DENTRY_TEST: %s\n", strerror(errno));
             close(fd);
             return 1;
         }
-    } else {
+    } 
+    else if (strcmp(argv[1], "rollback") == 0) 
+    {
+        ret = ioctl(fd, OBSIDIAN_IOC_REVERT);
+        if (ret < 0) 
+        {
+            fprintf(stderr, "Error ioctl DENTRY_TEST: %s\n", strerror(errno));
+            close(fd);
+            return 1;
+        }
+    }
+    else 
+    {
         fprintf(stderr, "Unknown option: %s\n", argv[1]);
         close(fd);
         return 1;

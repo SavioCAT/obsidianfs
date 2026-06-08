@@ -475,7 +475,7 @@ int obsidianfs_remove_dir_entry(struct inode *dir, const struct qstr *qstr)
 }
 
 // Update the dentry inode id to a new inode, useful for CoW
-static int obsidianfs_update_dir_entry(struct inode *dir, const struct qstr *qstr, unsigned long new_ino)
+int obsidianfs_update_dir_entry(struct inode *dir, const struct qstr *qstr, unsigned long new_ino)
 {
 	struct super_block *sb = dir->i_sb;
 	unsigned long blksize  = sb->s_blocksize;
@@ -991,6 +991,8 @@ static int obsidian_setattr(struct mnt_idmap *idmap, struct dentry *dentry, stru
 
 	if ((iattr->ia_valid & ATTR_FILE) && inode->i_size > 0) {
 		struct inode *old_inode = inode;
+		struct inode *prev_inode = iattr->ia_file->f_inode;
+		bool prev_was_cow = (prev_inode != iattr->ia_file->f_path.dentry->d_inode);
 		struct inode *new_inode = obsidianfs_cow_inode(inode, dentry);
 
 		if (IS_ERR(new_inode)) {
@@ -1005,6 +1007,10 @@ static int obsidian_setattr(struct mnt_idmap *idmap, struct dentry *dentry, stru
 		put_write_access(old_inode);
 		iattr->ia_file->f_inode   = new_inode;
 		iattr->ia_file->f_mapping = &new_inode->i_data;
+
+		/* Release the creation ref held on the previous CoW inode. */
+		if (prev_was_cow)
+			iput(prev_inode);
 
 		inode = new_inode;
 	}

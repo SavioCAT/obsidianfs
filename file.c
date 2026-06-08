@@ -52,6 +52,19 @@ struct dentry *obsidianfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, stru
 	return NULL;
 }
 
+static int obsidianfs_file_release(struct inode *inode, struct file *file)
+{
+	/*
+	 * After CoW, file->f_inode points to the new inode while
+	 * file->f_path.dentry still anchors the original inode.
+	 * We hold the creation reference on every CoW inode we redirect to,
+	 * so release it here to avoid busy-inode warnings on umount.
+	 */
+	if (inode != file->f_path.dentry->d_inode)
+		iput(inode);
+	return 0;
+}
+
 static ssize_t obsidian_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *file   = iocb->ki_filp;
@@ -67,6 +80,8 @@ static ssize_t obsidian_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 	// CoW, If there is something in the file, write the modification in a new inode
 	if (inode->i_size > 0) {
+		struct inode *prev_inode = file->f_inode;
+		bool prev_was_cow = (prev_inode != file->f_path.dentry->d_inode);
 		struct inode *new_inode = obsidianfs_cow_inode(inode, dentry);
 
 		if (IS_ERR(new_inode)) {
@@ -75,7 +90,7 @@ static ssize_t obsidian_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 		oi->flagsProtected = true; // Protect the old inode
 		mark_inode_dirty(inode);
-		
+
 		get_write_access(new_inode);
 		put_write_access(inode);
 
@@ -83,6 +98,10 @@ static ssize_t obsidian_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		file->f_inode   = new_inode;
 		file->f_mapping = &new_inode->i_data;
 		inode = new_inode;
+
+		/* Release the creation ref held on the previous CoW inode. */
+		if (prev_was_cow)
+			iput(prev_inode);
 	}
 
 	inode_lock(inode);
@@ -105,6 +124,7 @@ static ssize_t obsidianfs_copy_file_range(struct file *file_in, loff_t pos_in, s
 const struct file_operations obsidianfs_file_ops = {
 	.read_iter       = generic_file_read_iter,
 	.write_iter      = obsidian_write_iter,
+	.release         = obsidianfs_file_release,
 	.mmap            = generic_file_mmap,
 	.fsync           = generic_file_fsync,
 	.llseek          = generic_file_llseek,
