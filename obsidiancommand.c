@@ -12,7 +12,7 @@ int main(int argc, char *argv[])
     int fd, ret;
 
     if (argc != 3) {
-        fprintf(stderr, "Usage: %s <protect|listdentry|rollback> <file>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <protect|listdentry|rollback|forward> <file>\n", argv[0]);
         return 1;
     }
 
@@ -46,6 +46,16 @@ int main(int argc, char *argv[])
     else if (strcmp(argv[1], "rollback") == 0) 
     {
         ret = ioctl(fd, OBSIDIAN_IOC_REVERT);
+        if (ret < 0) 
+        {
+            fprintf(stderr, "Error ioctl DENTRY_TEST: %s\n", strerror(errno));
+            close(fd);
+            return 1;
+        }
+    }
+    else if (strcmp(argv[1], "forward") == 0) 
+    {
+        ret = ioctl(fd, OBSIDIAN_IOC_FORWARD);
         if (ret < 0) 
         {
             fprintf(stderr, "Error ioctl DENTRY_TEST: %s\n", strerror(errno));

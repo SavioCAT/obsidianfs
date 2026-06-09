@@ -11,8 +11,6 @@ long obsidianfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct inode *inode = file_inode(file);
     struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
-    //struct dentry *dentry = file->f_path.dentry;
-    //struct super_block *sb = inode->i_sb;
 
     pr_info("[OBSIDIANFS] ioctl cmd=0x%x on inode %lu\n", cmd, inode->i_ino);
 
@@ -65,13 +63,72 @@ long obsidianfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             }
 
             kfree(dentry_list);
-    	    drop_nlink(inode);
+
+            set_nlink(inode, 1);
             mark_inode_dirty(inode);
+
+            struct inode *prev_inode = obsidianfs_iget(inode->i_sb, prev_ino);
+            if (!IS_ERR(prev_inode)) {
+                set_nlink(prev_inode, count_dentry);
+                mark_inode_dirty(prev_inode);
+                iput(prev_inode);
+            }
 
             return 0;
         }
         case OBSIDIAN_IOC_FORWARD: {
-            // WIP FORWARD INODE
+            struct hlist_node *p;
+            unsigned long next_ino = oi->i_next_inode;
+            unsigned short count_dentry = 0;
+
+            if (next_ino == 0) {
+            	pr_err("[OBSIDIANFS] revert: no next inode for ino %lu\n", inode->i_ino);
+		        return -EINVAL;
+            }
+
+            spin_lock(&inode->i_lock);
+            hlist_for_each(p, &inode->i_dentry) {
+        	    count_dentry++; // Counter of dentry pointing to the inode
+    	    }
+
+            struct dentry **dentry_list = kcalloc(count_dentry, sizeof(struct dentry *), GFP_ATOMIC);
+            if (!dentry_list) {
+                spin_unlock(&inode->i_lock);
+                return -ENOMEM;
+            }
+
+            unsigned short i = 0;
+            hlist_for_each(p, &inode->i_dentry) {
+        	    dentry_list[i] = container_of(p, struct dentry, d_u.d_alias);
+                dget(dentry_list[i]);
+                i++;
+    	    }
+            spin_unlock(&inode->i_lock);
+
+            for (short j = 0; j < count_dentry; j++) {
+                obsidianfs_update_dir_entry(d_inode(dentry_list[j]->d_parent), &dentry_list[j]->d_name, next_ino);
+                d_drop(dentry_list[j]);
+                dput(dentry_list[j]);
+            }
+
+            kfree(dentry_list);
+
+            set_nlink(inode, 1);
+            mark_inode_dirty(inode);
+
+            struct inode *next_inode = obsidianfs_iget(inode->i_sb, next_ino);
+            if (!IS_ERR(next_inode)) {
+                pr_info("[OBSIDIANFS] forward: ino %lu -> next_ino %lu (mode=0%o size=%lld nlink=%u)\n",
+                        inode->i_ino, next_ino, next_inode->i_mode,
+                        next_inode->i_size, next_inode->i_nlink);
+                set_nlink(next_inode, count_dentry);
+                mark_inode_dirty(next_inode);
+                iput(next_inode);
+            } else {
+                pr_err("[OBSIDIANFS] forward: iget(%lu) failed: %ld\n",
+                       next_ino, PTR_ERR(next_inode));
+            }
+
             return 0;
         }
         case OBSIDIAN_IOC_DENTRY_TEST: {

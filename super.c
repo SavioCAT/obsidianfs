@@ -98,7 +98,7 @@ static void obsidianfs_evict_inode(struct inode *inode)
 {
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
 
-	if (!inode->i_nlink) { // If i_nlink == 0
+	if (!inode->i_nlink && !oi->i_previous_inode && !oi->i_next_inode) {
 		obsidianfs_truncate_blocks(inode);
 		obsidianfs_free_ino(inode->i_sb, inode->i_ino);
 	}

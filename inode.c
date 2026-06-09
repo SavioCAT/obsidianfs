@@ -657,7 +657,6 @@ struct inode *obsidianfs_cow_inode(struct inode *old_inode, struct dentry *dentr
 	struct obsidianfs_inode_meta *new_oi;
 	int ret;
 
-	/* Vider le page cache sur disque pour que les blocs source soient à jour */
 	ret = filemap_write_and_wait(old_inode->i_mapping);
 	if (ret) {
 		return ERR_PTR(ret);
@@ -682,9 +681,13 @@ struct inode *obsidianfs_cow_inode(struct inode *old_inode, struct dentry *dentr
 	}
 
 	new_inode->i_blocks      = old_inode->i_blocks;
-	new_oi->i_previous_inode = cpu_to_le32(old_inode->i_ino);
+	new_oi->i_previous_inode = old_inode->i_ino;
 	new_oi->i_next_inode     = 0;
-	old_oi->i_next_inode     = cpu_to_le32(new_inode->i_ino);
+	set_nlink(new_inode, old_inode->i_nlink);  
+
+	mark_inode_dirty(new_inode);
+
+	old_oi->i_next_inode = new_inode->i_ino;
 
 	ret = obsidianfs_update_dir_entry(d_inode(dentry->d_parent), &dentry->d_name, new_inode->i_ino);
 	if (ret) {
@@ -695,6 +698,35 @@ struct inode *obsidianfs_cow_inode(struct inode *old_inode, struct dentry *dentr
 
 	/* Invalider le dentry pour forcer un re-lookup au prochain accès */
 	d_drop(dentry);
+
+	// Update the other hard link
+	struct hlist_node *p;
+	unsigned short count_dentry = 0;
+	spin_lock(&old_inode->i_lock);
+    hlist_for_each(p, &old_inode->i_dentry) {
+        count_dentry++;
+    }
+
+    struct dentry **dentry_list = kcalloc(count_dentry, sizeof(struct dentry *), GFP_ATOMIC);
+    if (!dentry_list) {
+        spin_unlock(&old_inode->i_lock);
+        return ERR_PTR(-ENOMEM);
+    }
+
+    unsigned short i = 0;
+    hlist_for_each(p, &old_inode->i_dentry) {
+        dentry_list[i] = container_of(p, struct dentry, d_u.d_alias);
+        dget(dentry_list[i]);
+        i++;
+    }
+    spin_unlock(&old_inode->i_lock);
+
+	for (short j = 0; j < count_dentry; j++) {
+        obsidianfs_update_dir_entry(d_inode(dentry_list[j]->d_parent), &dentry_list[j]->d_name, new_inode->i_ino);
+        d_drop(dentry_list[j]);
+        dput(dentry_list[j]);
+    }
+    kfree(dentry_list);
 
 	mark_inode_dirty(old_inode);
 	mark_inode_dirty(new_inode);
@@ -773,7 +805,6 @@ static int obsidianfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct
 	}
 
 	d_instantiate(dentry, inode);
-	dget(dentry);
 	return 0;
 }
 
@@ -982,6 +1013,7 @@ static int obsidian_setattr(struct mnt_idmap *idmap, struct dentry *dentry, stru
 {
 	struct inode *inode = d_inode(dentry);
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
+	struct inode *cow_inode = NULL;
 	int error;
 
 	if (oi->flagsProtected) {
@@ -1012,12 +1044,16 @@ static int obsidian_setattr(struct mnt_idmap *idmap, struct dentry *dentry, stru
 		if (prev_was_cow)
 			iput(prev_inode);
 
+		cow_inode = new_inode;
 		inode = new_inode;
 	}
 
 	error = setattr_prepare(idmap, dentry, iattr);
-	if (error)
+	if (error) {
+		if (cow_inode)
+			iput(cow_inode);
 		return error;
+	}
 
 	if (iattr->ia_valid & ATTR_SIZE) {
 		loff_t old_size = inode->i_size;
@@ -1224,8 +1260,9 @@ static int obsidianfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, str
 	struct inode *new_inode = d_inode(new_dentry);
 	int err;
 
-	if (flags & ~RENAME_NOREPLACE)
+	if (flags & ~RENAME_NOREPLACE) {
 		return -EINVAL;
+	}
 
 	if (new_inode) {
 		if (S_ISDIR(old_inode->i_mode)) {
@@ -1235,8 +1272,9 @@ static int obsidianfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, str
 				return -ENOTEMPTY;
 		}
 		err = obsidianfs_remove_dir_entry(new_dir, &new_dentry->d_name);
-		if (err)
+		if (err) {
 			return err;
+		}	
 		if (S_ISDIR(new_inode->i_mode)) {
 			drop_nlink(new_inode);
 			drop_nlink(new_dir);
@@ -1246,8 +1284,9 @@ static int obsidianfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, str
 	}
 
 	err = obsidianfs_remove_dir_entry(old_dir, &old_dentry->d_name);
-	if (err)
+	if (err) {
 		return err;
+	}
 
 	err = obsidianfs_add_dir_entry(new_dir, &new_dentry->d_name, old_inode->i_ino);
 	if (err) {
@@ -1262,8 +1301,9 @@ static int obsidianfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, str
 	}
 
 	inode_set_mtime_to_ts(old_dir, inode_set_ctime_current(old_dir));
-	if (old_dir != new_dir)
+	if (old_dir != new_dir) {
 		inode_set_mtime_to_ts(new_dir, inode_set_ctime_current(new_dir));
+	}
 	mark_inode_dirty(old_dir);
 	mark_inode_dirty(new_dir);
 	mark_inode_dirty(old_inode);
