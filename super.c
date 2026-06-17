@@ -3,6 +3,7 @@
 #include <linux/fs_context.h>
 #include <linux/buffer_head.h>
 #include <linux/slab.h>
+#include <linux/statfs.h>
 #include "inode.h"
 #include "file.h"
 #include "pageops.h"
@@ -105,6 +106,13 @@ static void obsidianfs_evict_inode(struct inode *inode)
 	kfree(oi->i_block_alloc_info);
 	oi->i_block_alloc_info = NULL;
 	truncate_inode_pages_final(&inode->i_data);
+	/*
+	 * Detach the metadata buffers (indirect blocks) associated with this
+	 * inode via mark_buffer_dirty_inode() in obsidianfs_splice_branch().
+	 * Without this, inode->i_data.private_list is still populated and
+	 * clear_inode() hits BUG_ON(!list_empty(&inode->i_data.private_list)).
+	 */
+	invalidate_inode_buffers(inode);
 	clear_inode(inode);
 }
 
@@ -117,13 +125,37 @@ static void obsidianfs_put_super(struct super_block *sb)
 	sb->s_fs_info = NULL;
 }
 
+/*
+ * Report real usage to userspace. simple_statfs() leaves f_blocks/f_bfree/
+ * f_bavail/f_files/f_ffree at 0, which makes df hide the mount (0-block fs are
+ * treated as dummy) and makes tools like apt think the disk is full ("0 B
+ * available"). We fill the counters from the on-disk superblock instead.
+ */
+static int obsidianfs_statfs(struct dentry *dentry, struct kstatfs *buf)
+{
+	struct super_block *sb = dentry->d_sb;
+	struct obsidianfs_super_block *es = OBSIDIANFS_SB(sb)->s_es;
+	u64 total_data_blocks = le32_to_cpu(es->s_blocks_count) -
+				le32_to_cpu(es->s_first_data_block);
+
+	buf->f_type    = OBSIDIAN_MAGIC;
+	buf->f_bsize   = sb->s_blocksize;
+	buf->f_blocks  = total_data_blocks;
+	buf->f_bfree   = le32_to_cpu(es->s_free_blocks_count);
+	buf->f_bavail  = buf->f_bfree;
+	buf->f_files   = le32_to_cpu(es->s_inodes_count);
+	buf->f_ffree   = le32_to_cpu(es->s_free_inodes_count);
+	buf->f_namelen = 255;
+	return 0;
+}
+
 static const struct super_operations obsidianfs_sb_ops = {
 	.alloc_inode  = obsidianfs_alloc_inode,
 	.free_inode   = obsidianfs_free_inode,
 	.write_inode  = obsidianfs_write_inode,
 	.evict_inode  = obsidianfs_evict_inode,
 	.put_super    = obsidianfs_put_super,
-	.statfs       = simple_statfs,
+	.statfs       = obsidianfs_statfs,
 };
 
 static int obsidianfs_fill_super_persistent(struct super_block *sb, struct fs_context *fc)

@@ -1,0 +1,122 @@
+#!/bin/bash
+# obsidianfs installer
+set -euo pipefail
+
+KVER="6.19.14-obsidianfs-obsidianfs"
+LIVE_ROOTFS="/run/live/rootfs/filesystem.squashfs"
+
+die() { echo "ERREUR: $*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "need to be run with sudo"
+grep -q obsidianfs /proc/filesystems || die "obsidianfs is absent of the kernel"
+[ -d "$LIVE_ROOTFS" ] || die "système live introuvable ($LIVE_ROOTFS) — pas booté depuis l'ISO ?" # Verification if the file system obsidianfs exist
+
+#
+# Select the installation disk
+#
+
+MENU=()
+while read -r name size model; do
+    MENU+=("/dev/$name" "$size ${model:-}")
+done < <(lsblk -dno NAME,SIZE,MODEL,TYPE | awk '$NF=="disk"{NF--; print}')
+
+[ ${#MENU[@]} -gt 0 ] || die "aucun disque détecté" #check if the array is empty
+
+#Whiptail create a menu for the selection
+#Select the disk from the MENU array, and store the selection in TARGET
+TARGET=$(whiptail --title "Installer ObsidianFS" --menu "Choose the device - All data going to be erased" 20 70 10 "${MENU[@]}" 3>&1 1>&2 2>&3) || exit 1  
+
+whiptail --yesno "Last warning :\n\n$TARGET going to be fully erased.\n\nContinue ?" 12 60 || exit 1
+
+# nommage des partitions : sda -> sda1, nvme0n1 -> nvme0n1p1
+case "$TARGET" in *[0-9]) PSEP="p" ;; *) PSEP="" ;; esac
+P1="${TARGET}${PSEP}2" # partition 1 for /boot ext4
+P2="${TARGET}${PSEP}3" # partition 2 for obsidianfs 
+
+#
+# Creation of the partition
+#
+
+parted -s "$TARGET" -- \
+    mklabel gpt \
+    mkpart grubcore 1MiB 2MiB \
+    set 1 bios_grub on \
+    mkpart boot ext4 2MiB 514MiB \
+    mkpart root 514MiB 100%
+udevadm settle
+
+mkfs.ext4 -qF -L boot "$P1"
+mkfs.obsidianfs -L root "$P2"
+
+#
+# Mounting and copy of the system
+#
+
+mount -t obsidianfs "$P2" /mnt # mounting root fs obsidianfs
+mkdir -p /mnt/boot # creating the directory for the /boot
+mount "$P1" /mnt/boot # mounting ext4 for ext4 in order to use grub
+
+echo "Copy of the system, can take several minutes"
+rsync -aAXH --info=progress2 "$LIVE_ROOTFS"/ /mnt/
+
+#
+# Configuration of the system
+#
+PARTUUID=$(blkid -s PARTUUID -o value "$P2") # get the partuuid of the partition obsidianfs
+[ -n "$PARTUUID" ] || die "No partuuid for $P2" 
+
+cat > /mnt/etc/fstab <<EOF
+PARTUUID=$PARTUUID  /      obsidianfs  defaults  0  0
+LABEL=boot          /boot  ext4        defaults  0  2
+EOF
+
+NEWHOST=$(whiptail --inputbox "Name of the device" 10 50 "obsidianfs" 3>&1 1>&2 2>&3) || NEWHOST="obsidianfs"
+echo "$NEWHOST" > /mnt/etc/hostname
+sed -i "s/127.0.1.1.*/127.0.1.1\t$NEWHOST/" /mnt/etc/hosts 2>/dev/null || echo -e "127.0.1.1\t$NEWHOST" >> /mnt/etc/hosts
+
+#Remove all package from the live mode
+chroot /mnt apt-get -y purge live-boot live-boot-initramfs-tools live-config live-config-systemd 2>/dev/null || true
+
+#Install the different useful packages 
+for d in dev dev/pts proc sys
+do 
+    mount --bind /$d /mnt/$d
+done
+
+echo "nameserver 8.8.8.8" > /mnt/etc/resolv.conf
+echo "nameserver 1.1.1.1" >> /mnt/etc/resolv.conf
+
+chroot /mnt apt-get update
+chroot /mnt apt-get upgrade
+chroot /mnt apt-get -y install vim isc-dhcp-client ssh git python3 
+
+for d in sys proc dev/pts dev
+do 
+umount /mnt/$d
+done
+
+
+echo "new root password :"
+chroot /mnt passwd root
+
+# 
+# Grub
+#
+
+[ -f "/mnt/boot/vmlinuz-$KVER" ] || die "vmlinuz-$KVER is absent from /mnt/boot"
+grub-install --target=i386-pc --boot-directory=/mnt/boot "$TARGET"
+# Install grub on TARGET, set /mnt/boot as the device to use for boot
+
+cat > /mnt/boot/grub/grub.cfg <<EOF
+set default=0
+set timeout=30
+
+menuentry "Debian with ObsidianFS" {
+    insmod ext2
+    search --no-floppy --label boot --set=root
+    linux /vmlinuz-$KVER root=PARTUUID=$PARTUUID rootfstype=obsidianfs rw
+}
+EOF
+
+umount /mnt/boot /mnt
+whiptail --msgbox "Installation finished\nRemove the iso and reboot" 12 60

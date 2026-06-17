@@ -237,16 +237,11 @@ int main(int argc, char *argv[])
 	/* ---- Block 2: Block bitmap ---- */
 	{
 		uint8_t *bbmap = calloc(OBSIDIANFS_BLOCK_BITMAP_SIZE, block_size);
-		if (!bbmap) { 
-			perror("calloc"); 
-			rc = 1; 
-			goto out_close; 
+		if (!bbmap) {
+			perror("calloc");
+			rc = 1;
+			goto out_close;
 		}
-
-		for (uint32_t i = 0; i < first_data_block; i++) { // Set the first block until first data block as used. 
-			bbmap[i / 8] |= (1u << (i % 8));
-		}
-
 
 		rc = write_blocks(fd, OBSIDIANFS_BLOCK_BITMAP_BLOCK, block_size, OBSIDIANFS_BLOCK_BITMAP_SIZE, bbmap);
 		free(bbmap);

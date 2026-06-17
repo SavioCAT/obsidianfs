@@ -535,6 +535,13 @@ void obsidianfs_free_blocks(struct inode *inode, obsidianfs_fsblk_t block, unsig
 	mutex_unlock(&sbi->s_lock);
 
 	if (freed) {
+		unsigned long sectors = freed * (sb->s_blocksize >> 9);
+
+		if (inode->i_blocks >= sectors)
+			inode->i_blocks -= sectors;
+		else
+			inode->i_blocks = 0;
+
 		mark_buffer_dirty(sbi->s_sbh);
 		mark_inode_dirty(inode);
 	}
@@ -549,12 +556,24 @@ static void obsidianfs_splice_branch(struct inode *inode, long block, Indirect *
 
 	*where->p = where->key;
 
+	if (where->bh)
+		mark_buffer_dirty_inode(where->bh, inode);
+
 	if (oi->i_block_alloc_info) {
 		oi->i_block_alloc_info->last_alloc_logical_block  =
 			block + blks - 1;
 		oi->i_block_alloc_info->last_alloc_physical_block =
 			le32_to_cpu(where[num].key) + blks - 1;
 	}
+
+	/*
+	 * Comptabiliser les blocs physiques fraîchement alloués : num blocs
+	 * de métadonnées (indirects) + blks blocs de données. i_blocks est en
+	 * secteurs de 512 octets, d'où la conversion depuis la taille de bloc.
+	 */
+	inode->i_blocks += (unsigned long)(num + blks) *
+			   (inode->i_sb->s_blocksize >> 9);
+
 	mark_inode_dirty(inode);
 }
 

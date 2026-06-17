@@ -11,9 +11,6 @@ long obsidianfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
     struct inode *inode = file_inode(file);
     struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
-
-    pr_info("[OBSIDIANFS] ioctl cmd=0x%x on inode %lu\n", cmd, inode->i_ino);
-
     switch (cmd) {
         case OBSIDIAN_IOC_PROTECT:
             oi->flagsProtected = true;
@@ -36,6 +33,9 @@ long obsidianfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
             	pr_err("[OBSIDIANFS] revert: no previous inode for ino %lu\n", inode->i_ino);
 		        return -EINVAL;
             }
+
+            pr_info("[OBSIDIANFS REVERT] ino=%lu -> prev_ino=%lu (i_next=%lu)\n",
+                    inode->i_ino, prev_ino, (unsigned long)oi->i_next_inode);
 
             spin_lock(&inode->i_lock);
             hlist_for_each(p, &inode->i_dentry) {

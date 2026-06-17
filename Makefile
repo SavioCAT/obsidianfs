@@ -1,4 +1,4 @@
-obsidianfs-objs := super.o inode.o file.o pageops.o ioctlops.o
+obsidianfs-objs := super.o inode.o file.o pageops.o ioctlops.o cow.o
 
 obj-m += obsidianfs.o
 
@@ -16,7 +16,8 @@ userspace:
 	gcc -O2 -Wall -Wextra mkfs.obsidianfs.c -o mkfs.obsidianfs
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	rm -f *.o *.ko *.mod *.mod.c .*.cmd modules.order Module.symvers
+	rm -rf .tmp_versions
 	rm -f commandBin mkfs.obsidianfs
 
 load:
