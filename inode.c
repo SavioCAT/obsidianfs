@@ -9,6 +9,7 @@
 #include "file.h"
 #include "pageops.h"
 #include "super.h"
+#include "cow.h"
 
 static int obsidianfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry, umode_t mode, bool excl);
 static int obsidianfs_hardlink(struct dentry *old_dentry, struct inode *dir, struct dentry *dentry);
@@ -118,6 +119,8 @@ struct inode *obsidianfs_iget(struct super_block *sb, unsigned long ino)
 	oi->valid_size     = inode->i_size;
 	oi->flagsProtected = raw->i_flagsProtected ? true : false;
 	oi->i_block_group  = 0;
+	oi->i_next_inode = le32_to_cpu(raw->i_next_inode);
+    oi->i_previous_inode = le32_to_cpu(raw->i_previous_inode);
 
 	brelse(bh);
 
@@ -261,8 +264,13 @@ struct inode *obsidianfs_create_inode_memory(struct super_block *sb, const struc
 	}
 
 	oi = OBSIDIANFS_INODE(inode);
-	oi->flagsProtected = false;
-	oi->valid_size     = 0;
+	
+	memset(oi->i_data, 0, sizeof(oi->i_data));
+	oi->i_block_group    = 0;
+	oi->flagsProtected   = false;
+	oi->valid_size       = 0;
+	oi->i_next_inode     = 0;
+	oi->i_previous_inode = 0;
 
 	inode->i_ino = obsidianfs_alloc_ino(sb);
 	if (!inode->i_ino) {
@@ -470,6 +478,49 @@ int obsidianfs_remove_dir_entry(struct inode *dir, const struct qstr *qstr)
 	return -ENOENT;
 }
 
+// Update the dentry inode id to a new inode, useful for CoW
+int obsidianfs_update_dir_entry(struct inode *dir, const struct qstr *qstr, unsigned long new_ino)
+{
+	struct super_block *sb = dir->i_sb;
+	unsigned long blksize  = sb->s_blocksize;
+	unsigned long nblocks  = (dir->i_size + blksize - 1) >> sb->s_blocksize_bits;
+	unsigned long blk;
+
+	for (blk = 0; blk < nblocks; blk++) {
+		struct buffer_head *bh;
+		struct obsidianfs_dir_entry *de;
+		char *base, *end;
+
+		bh = obsidianfs_dir_getblk(dir, blk, 0);
+		if (!bh)
+			return -EIO;
+
+		base = bh->b_data;
+		end  = base + blksize;
+		de   = (struct obsidianfs_dir_entry *)base;
+
+		while ((char *)de < end) {
+			unsigned int rec_len = le16_to_cpu(de->rec_len);
+
+			if (!rec_len || rec_len > (unsigned int)(end - (char *)de)) {
+				brelse(bh);
+				return -EIO;
+			}
+			if (le32_to_cpu(de->ino) &&
+			    de->name_len == qstr->len &&
+			    memcmp(de->name, qstr->name, qstr->len) == 0) {
+				de->ino = cpu_to_le32(new_ino);
+				mark_buffer_dirty(bh);
+				brelse(bh);
+				return 0;
+			}
+			de = (struct obsidianfs_dir_entry *)((char *)de + rec_len);
+		}
+		brelse(bh);
+	}
+	return -ENOENT;
+}
+
 /*
  * obsidianfs_truncate_blocks - Truncate a file's data blocks
  * @inode: the inode to truncate
@@ -478,9 +529,9 @@ void obsidianfs_truncate_blocks(struct inode *inode)
 {
 	struct super_block *sb = inode->i_sb;
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
-	struct buffer_head *ind_bh, *dind_bh;
-	__le32 *ind_blocks, *dind_blocks;
-	int i, j;
+	struct buffer_head *ind_bh, *dind_bh, *tind_bh;
+	__le32 *ind_blocks, *dind_blocks, *tind_blocks;
+	int i, j, k;
 
 	mutex_lock(&oi->i_lock);
 	for (i = 0; i < NDIR_BLOCKS; i++) {
@@ -528,7 +579,39 @@ void obsidianfs_truncate_blocks(struct inode *inode)
 		oi->i_data[OBSIDIAN_DIND_BLOCK] = 0;
 	}
 
-	// Triple-indirect not implemented for the moment, not useful for the moment. 
+	if (oi->i_data[OBSIDIAN_TIND_BLOCK]) {
+		tind_bh = sb_bread(sb, le32_to_cpu(oi->i_data[OBSIDIAN_TIND_BLOCK]));
+		if (tind_bh) {
+			tind_blocks = (__le32 *)tind_bh->b_data;
+			for (i = 0; i < (int)ADDR_PER_BLOCK(sb); i++) {
+				if (!tind_blocks[i])
+					continue;
+				dind_bh = sb_bread(sb, le32_to_cpu(tind_blocks[i]));
+				if (dind_bh) {
+					dind_blocks = (__le32 *)dind_bh->b_data;
+					for (j = 0; j < (int)ADDR_PER_BLOCK(sb); j++) {
+						if (!dind_blocks[j])
+							continue;
+						ind_bh = sb_bread(sb, le32_to_cpu(dind_blocks[j]));
+						if (ind_bh) {
+							ind_blocks = (__le32 *)ind_bh->b_data;
+							for (k = 0; k < (int)ADDR_PER_BLOCK(sb); k++) {
+								if (ind_blocks[k])
+									obsidianfs_free_blocks(inode, le32_to_cpu(ind_blocks[k]), 1);
+							}
+							brelse(ind_bh);
+						}
+						obsidianfs_free_blocks(inode, le32_to_cpu(dind_blocks[j]), 1);
+					}
+					brelse(dind_bh);
+				}
+				obsidianfs_free_blocks(inode, le32_to_cpu(tind_blocks[i]), 1);
+			}
+			brelse(tind_bh);
+		}
+		obsidianfs_free_blocks(inode, le32_to_cpu(oi->i_data[OBSIDIAN_TIND_BLOCK]), 1);
+		oi->i_data[OBSIDIAN_TIND_BLOCK] = 0;
+	}
 
 	inode->i_size   = 0;
 	inode->i_blocks = 0;
@@ -608,7 +691,6 @@ static int obsidianfs_symlink(struct mnt_idmap *idmap, struct inode *dir, struct
 	}
 
 	d_instantiate(dentry, inode);
-	dget(dentry);
 	return 0;
 }
 
@@ -824,6 +906,15 @@ static int obsidian_setattr(struct mnt_idmap *idmap, struct dentry *dentry, stru
 		return -EPERM;
 	}
 
+	// CoW only when the operation threatens data: a size change (truncate)
+	// overwrites blocks; chmod/chown/utimes do not touch them.
+	if ((iattr->ia_valid & ATTR_SIZE) && inode->i_size > 0) {
+		struct inode *save_inode = obsidianfs_cow_inode(inode, dentry);
+		if (IS_ERR(save_inode)) {
+			return PTR_ERR(save_inode);
+		}
+	}
+
 	error = setattr_prepare(idmap, dentry, iattr);
 	if (error)
 		return error;
@@ -1027,19 +1118,21 @@ static int obsidianfs_rmdir(struct inode *dir, struct dentry *dentry)
 	return 0;
 }
 
-static int obsidianfs_rename(struct mnt_idmap *idmap,
-			      struct inode *old_dir, struct dentry *old_dentry,
-			      struct inode *new_dir, struct dentry *new_dentry,
-			      unsigned int flags)
+static int obsidianfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, struct dentry *old_dentry, struct inode *new_dir, struct dentry *new_dentry, unsigned int flags)
 {
 	struct inode *old_inode = d_inode(old_dentry);
 	struct inode *new_inode = d_inode(new_dentry);
 	int err;
 
-	if (flags & ~RENAME_NOREPLACE)
+	if (flags & ~RENAME_NOREPLACE) {
 		return -EINVAL;
+	}
 
 	if (new_inode) {
+		if (OBSIDIANFS_INODE(new_inode)->flagsProtected) {
+			pr_err("[ERROR OBSIDIANFS] %s: target file is protected\n", __func__);
+			return -EPERM;
+		}
 		if (S_ISDIR(old_inode->i_mode)) {
 			if (!S_ISDIR(new_inode->i_mode))
 				return -ENOTDIR;
@@ -1047,8 +1140,9 @@ static int obsidianfs_rename(struct mnt_idmap *idmap,
 				return -ENOTEMPTY;
 		}
 		err = obsidianfs_remove_dir_entry(new_dir, &new_dentry->d_name);
-		if (err)
+		if (err) {
 			return err;
+		}	
 		if (S_ISDIR(new_inode->i_mode)) {
 			drop_nlink(new_inode);
 			drop_nlink(new_dir);
@@ -1058,8 +1152,9 @@ static int obsidianfs_rename(struct mnt_idmap *idmap,
 	}
 
 	err = obsidianfs_remove_dir_entry(old_dir, &old_dentry->d_name);
-	if (err)
+	if (err) {
 		return err;
+	}
 
 	err = obsidianfs_add_dir_entry(new_dir, &new_dentry->d_name, old_inode->i_ino);
 	if (err) {
@@ -1074,8 +1169,9 @@ static int obsidianfs_rename(struct mnt_idmap *idmap,
 	}
 
 	inode_set_mtime_to_ts(old_dir, inode_set_ctime_current(old_dir));
-	if (old_dir != new_dir)
+	if (old_dir != new_dir) {
 		inode_set_mtime_to_ts(new_dir, inode_set_ctime_current(new_dir));
+	}
 	mark_inode_dirty(old_dir);
 	mark_inode_dirty(new_dir);
 	mark_inode_dirty(old_inode);

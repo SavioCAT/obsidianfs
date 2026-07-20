@@ -40,6 +40,11 @@ static inline int verify_chain(Indirect *from, Indirect *to)
 	return (from > to);
 }
 
+static obsidianfs_fsblk_t obsidianfs_group_first_block_no(struct super_block *sb, unsigned long group_no)
+{
+	return 0;
+}
+
 int obsidian_read_folio(struct file *file, struct folio *folio)
 {
 	return mpage_read_folio(folio, obsidianfs_get_block);
@@ -52,9 +57,7 @@ int obsidian_write_begin(const struct kiocb *iocb, struct address_space *mapping
 	return block_write_begin(mapping, pos, len, foliop, obsidianfs_get_block);
 }
 
-int obsidian_write_end(const struct kiocb *iocb, struct address_space *mapping,
-		       loff_t pos, unsigned int len, unsigned int copied,
-		       struct folio *folio, void *fsdata)
+int obsidian_write_end(const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned int len, unsigned int copied, struct folio *folio, void *fsdata)
 {
 	struct inode *inode = mapping->host;
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
@@ -161,12 +164,6 @@ no_block:
 	return p;
 }
 
-/* TODO: requires on-disk block group layout in s_fs_info */
-static obsidianfs_fsblk_t obsidianfs_group_first_block_no(struct super_block *sb, unsigned long group_no)
-{
-	return 0;
-}
-
 static unsigned long obsidianfs_find_near(struct inode *inode, Indirect *ind)
 {
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
@@ -244,9 +241,7 @@ static int obsidianfs_blks_to_allocate(Indirect *branch, int k, unsigned long bl
 	return count;
 }
 
-static int obsidianfs_alloc_branch(struct inode *inode, int indirect_blks,
-				    int *blks, unsigned long goal,
-				    int *offsets, Indirect *branch)
+static int obsidianfs_alloc_branch(struct inode *inode, int indirect_blks, int *blks, unsigned long goal, int *offsets, Indirect *branch)
 {
 	int blocksize = inode->i_sb->s_blocksize;
 	int i, n = 0;
@@ -476,8 +471,7 @@ out_unlock:
  * Updates the block bitmap (block OBSIDIANFS_BLOCK_BITMAP_BLOCK) and
  * s_free_blocks_count in the on-disk superblock.
  */
-void obsidianfs_free_blocks(struct inode *inode, obsidianfs_fsblk_t block,
-			     unsigned long count)
+void obsidianfs_free_blocks(struct inode *inode, obsidianfs_fsblk_t block, unsigned long count)
 {
 	struct super_block *sb = inode->i_sb;
 	struct obsidianfs_sb_info *sbi = OBSIDIANFS_SB(sb);
@@ -541,6 +535,13 @@ void obsidianfs_free_blocks(struct inode *inode, obsidianfs_fsblk_t block,
 	mutex_unlock(&sbi->s_lock);
 
 	if (freed) {
+		unsigned long sectors = freed * (sb->s_blocksize >> 9);
+
+		if (inode->i_blocks >= sectors)
+			inode->i_blocks -= sectors;
+		else
+			inode->i_blocks = 0;
+
 		mark_buffer_dirty(sbi->s_sbh);
 		mark_inode_dirty(inode);
 	}
@@ -555,12 +556,24 @@ static void obsidianfs_splice_branch(struct inode *inode, long block, Indirect *
 
 	*where->p = where->key;
 
+	if (where->bh)
+		mark_buffer_dirty_inode(where->bh, inode);
+
 	if (oi->i_block_alloc_info) {
 		oi->i_block_alloc_info->last_alloc_logical_block  =
 			block + blks - 1;
 		oi->i_block_alloc_info->last_alloc_physical_block =
 			le32_to_cpu(where[num].key) + blks - 1;
 	}
+
+	/*
+	 * Comptabiliser les blocs physiques fraîchement alloués : num blocs
+	 * de métadonnées (indirects) + blks blocs de données. i_blocks est en
+	 * secteurs de 512 octets, d'où la conversion depuis la taille de bloc.
+	 */
+	inode->i_blocks += (unsigned long)(num + blks) *
+			   (inode->i_sb->s_blocksize >> 9);
+
 	mark_inode_dirty(inode);
 }
 

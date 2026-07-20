@@ -19,20 +19,20 @@
 #define OBSIDIANFS_INODE_SIZE         128u
 
 struct __attribute__((packed)) obsidianfs_super_block {
-	uint32_t s_magic;				// 4
+	uint32_t s_magic;			// 4
 	uint32_t s_blocks_count;		// 4
 	uint32_t s_inodes_count;		// 4
-	uint32_t s_free_blocks_count;   // 4
-	uint32_t s_free_inodes_count;   // 4
-	uint32_t s_first_data_block;	// 4
+	uint32_t s_free_blocks_count;   	// 4
+	uint32_t s_free_inodes_count;   	// 4
+	uint32_t s_first_data_block;		// 4
 	uint32_t s_log_block_size;		// 4
 	uint32_t s_inode_size;			// 4
-	uint32_t s_mtime;				// 4
-	uint32_t s_wtime;				// 4
+	uint32_t s_mtime;			// 4
+	uint32_t s_wtime;			// 4
 	uint8_t  s_uuid[16];			// 16 
 	char     s_volume_name[16];		// 16
 	uint8_t  s_padding[4024];		// 4024 => In order to use all the block size
-									// SUM = 4096 bytes
+						// SUM = 4096 bytes
 };
 
 
@@ -237,16 +237,11 @@ int main(int argc, char *argv[])
 	/* ---- Block 2: Block bitmap ---- */
 	{
 		uint8_t *bbmap = calloc(OBSIDIANFS_BLOCK_BITMAP_SIZE, block_size);
-		if (!bbmap) { 
-			perror("calloc"); 
-			rc = 1; 
-			goto out_close; 
+		if (!bbmap) {
+			perror("calloc");
+			rc = 1;
+			goto out_close;
 		}
-
-		for (uint32_t i = 0; i < first_data_block; i++) { // Set the first block until first data block as used. 
-			bbmap[i / 8] |= (1u << (i % 8));
-		}
-
 
 		rc = write_blocks(fd, OBSIDIANFS_BLOCK_BITMAP_BLOCK, block_size, OBSIDIANFS_BLOCK_BITMAP_SIZE, bbmap);
 		free(bbmap);
