@@ -9,7 +9,7 @@ die() { echo "ERREUR: $*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "need to be run with sudo"
 grep -q obsidianfs /proc/filesystems || die "obsidianfs is absent of the kernel"
-[ -d "$LIVE_ROOTFS" ] || die "système live introuvable ($LIVE_ROOTFS) — pas booté depuis l'ISO ?" # Verification if the file system obsidianfs exist
+[ -d "$LIVE_ROOTFS" ] || die "live system not found ($LIVE_ROOTFS) is it boot from the ISO ?" # Verification if the file system obsidianfs exist
 
 #
 # Select the installation disk
@@ -20,15 +20,15 @@ while read -r name size model; do
     MENU+=("/dev/$name" "$size ${model:-}")
 done < <(lsblk -dno NAME,SIZE,MODEL,TYPE | awk '$NF=="disk"{NF--; print}')
 
-[ ${#MENU[@]} -gt 0 ] || die "aucun disque détecté" #check if the array is empty
+[ ${#MENU[@]} -gt 0 ] || die "No disk detected" #check if the array is empty
 
 #Whiptail create a menu for the selection
 #Select the disk from the MENU array, and store the selection in TARGET
-TARGET=$(whiptail --title "Installer ObsidianFS" --menu "Choose the device - All data going to be erased" 20 70 10 "${MENU[@]}" 3>&1 1>&2 2>&3) || exit 1  
+TARGET=$(whiptail --title "Install ObsidianFS" --menu "Choose the device - All data going to be erased" 20 70 10 "${MENU[@]}" 3>&1 1>&2 2>&3) || exit 1  
 
 whiptail --yesno "Last warning :\n\n$TARGET going to be fully erased.\n\nContinue ?" 12 60 || exit 1
 
-# nommage des partitions : sda -> sda1, nvme0n1 -> nvme0n1p1
+# name the partition : sda -> sda1, nvme0n1 -> nvme0n1p1
 case "$TARGET" in *[0-9]) PSEP="p" ;; *) PSEP="" ;; esac
 P1="${TARGET}${PSEP}2" # partition 1 for /boot ext4
 P2="${TARGET}${PSEP}3" # partition 2 for obsidianfs 
@@ -83,18 +83,105 @@ do
     mount --bind /$d /mnt/$d
 done
 
-echo "nameserver 8.8.8.8" > /mnt/etc/resolv.conf
-echo "nameserver 1.1.1.1" >> /mnt/etc/resolv.conf
+rm -f /mnt/etc/resolv.conf
+cat > /mnt/etc/resolv.conf <<EOF
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+EOF
 
-chroot /mnt apt-get update
-chroot /mnt apt-get upgrade
-chroot /mnt apt-get -y install vim isc-dhcp-client ssh git python3 
+rm -f /mnt/etc/hosts
+cat > /mnt/etc/hosts<<EOF
+127.0.1.1 obsidianfs
+127.0.0.1 localhost
+EOF
+
+# Create the DHCP deamon
+mkdir -p /mnt/etc/systemd/network
+cat > /mnt/etc/systemd/network/20-wired.network <<EOF
+[Match]
+Name=en*
+
+[Network]
+DHCP=yes
+EOF
+
+# Enable the DHCP deamon
+chroot /mnt systemctl enable systemd-networkd
+
+echo 'APT::Sandbox::User "root";' > /mnt/etc/apt/apt.conf.d/10no-sandbox
+
+chroot /mnt apt-get -y update
+chroot /mnt apt-get -y upgrade
+chroot /mnt apt-get -y install vim isc-dhcp-client ssh git python3 gcc wget build-essential curl gpg openssl nano
+
+chroot /mnt /bin/bash -c '
+    curl -s https://kopia.io/signing-key | gpg --dearmor -o /etc/apt/keyrings/kopia-keyring.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/kopia-keyring.gpg] http://packages.kopia.io/apt/ stable main" | tee /etc/apt/sources.list.d/kopia.list
+    apt-get -y update
+    apt-get -y install kopia kopia-ui 
+'
 
 for d in sys proc dev/pts dev
 do 
 umount /mnt/$d
 done
 
+# Kopia repository password (encrypts the backup repository)
+KOPIA_PASS=$(whiptail --passwordbox "Password of the Kopia repository" 10 60 3>&1 1>&2 2>&3) || die "password needed"
+[ -n "$KOPIA_PASS" ] || die "Empty password"
+# Credentials for the TLS-protected web UI (HTTP basic auth)
+KOPIA_UI_USER=$(whiptail --inputbox "Username for the Kopia web UI" 10 60 "admin" 3>&1 1>&2 2>&3) || KOPIA_UI_USER="admin"
+[ -n "$KOPIA_UI_USER" ] || KOPIA_UI_USER="admin"
+KOPIA_UI_PASS=$(whiptail --passwordbox "Password for the Kopia web UI" 10 60 3>&1 1>&2 2>&3) || die "web UI password needed"
+[ -n "$KOPIA_UI_PASS" ] || die "Empty web UI password"
+
+# Create the Kopia repo (HOME=/root -> config file in /root/.config/kopia).
+chroot /mnt env HOME=/root KOPIA_PASSWORD="$KOPIA_PASS" kopia repository create filesystem --path /srv/kopia-repo
+
+mkdir -p /mnt/etc/kopia
+
+# Generate a self-signed TLS certificate for the Kopia server (valid 10 years)
+openssl req -x509 -newkey rsa:4096 -nodes \
+    -keyout /mnt/etc/kopia/tls.key \
+    -out /mnt/etc/kopia/tls.cert \
+    -days 3650 \
+    -subj "/CN=$NEWHOST" \
+    -addext "subjectAltName=DNS:$NEWHOST,DNS:localhost,IP:127.0.0.1"
+chmod 600 /mnt/etc/kopia/tls.key
+chmod 644 /mnt/etc/kopia/tls.cert
+
+# SHA256 fingerprint that Kopia clients need to trust this self-signed server
+KOPIA_CERT_FPR=$(openssl x509 -in /mnt/etc/kopia/tls.cert -noout -fingerprint -sha256 \
+    | sed 's/^.*=//; s/://g' | tr 'A-Z' 'a-z')
+
+# Secrets read by the systemd service (repo password + web UI credentials)
+cat > /mnt/etc/kopia/server.env <<EOF
+KOPIA_PASSWORD=$KOPIA_PASS
+KOPIA_SERVER_USERNAME=$KOPIA_UI_USER
+KOPIA_SERVER_PASSWORD=$KOPIA_UI_PASS
+EOF
+chmod 600 /mnt/etc/kopia/server.env
+
+# Creation of the Kopia deamon (TLS + basic auth, no more --insecure/--without-password)
+cat > /mnt/etc/systemd/system/kopia-server.service <<'EOF'
+[Unit]
+Description=Kopia backup server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/kopia/server.env
+ExecStart=/usr/bin/kopia server start --ui --tls-cert-file=/etc/kopia/tls.cert --tls-key-file=/etc/kopia/tls.key --address=0.0.0.0:51515 --config-file=/root/.config/kopia/repository.config
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+chroot /mnt systemctl enable kopia-server.service
 
 echo "new root password :"
 chroot /mnt passwd root
@@ -119,4 +206,4 @@ menuentry "Debian with ObsidianFS" {
 EOF
 
 umount /mnt/boot /mnt
-whiptail --msgbox "Installation finished\nRemove the iso and reboot" 12 60
+whiptail --msgbox "Installation finished\n\nKopia web UI (HTTPS): https://<device-ip>:51515\n  user: $KOPIA_UI_USER\n  cert SHA256: $KOPIA_CERT_FPR\n\nRemove the iso and reboot" 18 78

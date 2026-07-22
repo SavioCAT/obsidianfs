@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
-
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/writeback.h>
@@ -98,9 +96,6 @@ static ssize_t obsidianfs_copy_file_range(struct file *file_in, loff_t pos_in, s
 	return splice_file_range(file_in, &pos_in, file_out, &pos_out, len);
 }
 
-// Take the CoW snapshot for a write that comes through a shared mapping.
-// Same contract as in obsidian_write_iter: one snapshot per open file,
-// private_data is the "already snapshotted" marker.
 static int obsidianfs_mmap_cow(struct file *file)
 {
 	struct inode *inode = file->f_mapping->host;
@@ -115,9 +110,6 @@ static int obsidianfs_mmap_cow(struct file *file)
 	return 0;
 }
 
-// First write fault on a shared mapping. This also catches mappings created
-// read-only and upgraded with mprotect(PROT_WRITE) afterwards, which never
-// go through obsidianfs_file_mmap with VM_WRITE set.
 static vm_fault_t obsidianfs_page_mkwrite(struct vm_fault *vmf)
 {
 	struct file *file   = vmf->vma->vm_file;
@@ -146,9 +138,6 @@ static int obsidianfs_file_mmap(struct file *file, struct vm_area_struct *vma)
 	struct inode *inode = file->f_mapping->host;
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
 
-	// VM_MAYWRITE (not just VM_WRITE) so a PROT_READ/MAP_SHARED mapping on a
-	// fd opened O_RDWR cannot be upgraded to writable later with mprotect.
-	// MAP_PRIVATE stays allowed: its writes never reach the file.
 	if (oi->flagsProtected &&
 	    (vma->vm_flags & VM_SHARED) && (vma->vm_flags & VM_MAYWRITE)) {
 		pr_err("[ERROR OBSIDIANFS] %s: file is protected\n", __func__);

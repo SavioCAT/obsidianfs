@@ -13,8 +13,14 @@ long obsidianfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
     struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
     switch (cmd) {
         case OBSIDIAN_IOC_PROTECT:
+            int err;
             oi->flagsProtected = true;
             mark_inode_dirty(inode);
+            err = write_inode_now(inode, 1);
+            if (err) {
+                pr_info("[OBSIDIANFS] write of the inode %lu failed\n", inode->i_ino);
+                return err;
+            }
             pr_info("[OBSIDIANFS] inode %lu protected\n", inode->i_ino);
             return 0;
 

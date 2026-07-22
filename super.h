@@ -22,9 +22,6 @@ struct obsidianfs_super_block {
 	__u8	s_reserved[458];	/* Pad to 512 bytes */
 };
 
-/*
- * In-memory superblock info — only what fill_super actually uses.
- */
 struct obsidianfs_sb_info {
 	struct buffer_head				*s_sbh;		/* buffer holding s_es */
 	struct obsidianfs_super_block	*s_es;		/* pointer into s_sbh->b_data */
