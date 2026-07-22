@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
-
 #include <linux/fs.h>
 #include <linux/pagemap.h>
 #include <linux/mm.h>
@@ -178,8 +176,7 @@ unsigned long obsidianfs_alloc_ino(struct super_block *sb)
 
 		bmap_bh = sb_bread(sb, OBSIDIANFS_INODE_BITMAP_BLOCK + bmap_idx);
 		if (!bmap_bh) {
-			pr_err("[ERROR OBSIDIANFS] %s: cannot read inode bitmap block %lu\n",
-			       __func__, bmap_idx);
+			pr_err("[ERROR OBSIDIANFS] %s: cannot read inode bitmap block %lu\n", __func__, bmap_idx);
 			goto out;
 		}
 
@@ -728,16 +725,13 @@ static void obsidianfs_truncate_partial(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 	struct obsidianfs_inode_meta *oi = OBSIDIANFS_INODE(inode);
 	unsigned long ptrs = ADDR_PER_BLOCK(sb);
-	/* First block index that must be freed; keep blocks 0 .. first-1 */
-	unsigned long first = (inode->i_size + sb->s_blocksize - 1) >>
-			       sb->s_blocksize_bits;
+	unsigned long first = (inode->i_size + sb->s_blocksize - 1) >> sb->s_blocksize_bits;
 	unsigned long i, j;
 	struct buffer_head *ind_bh, *dind_bh;
 	__le32 *ind_data, *dind_data;
 
 	mutex_lock(&oi->i_lock);
 
-	/* 1. Direct blocks */
 	for (i = first; i < NDIR_BLOCKS; i++) {
 		if (oi->i_data[i]) {
 			obsidianfs_free_blocks(inode, le32_to_cpu(oi->i_data[i]), 1);
@@ -745,12 +739,10 @@ static void obsidianfs_truncate_partial(struct inode *inode)
 		}
 	}
 
-	/* 2. Single-indirect block: covers logical blocks [NDIR .. NDIR+ptrs) */
 	if (oi->i_data[OBSIDIAN_IND_BLOCK]) {
 		long ind_start = (long)first - NDIR_BLOCKS;
 
 		if (ind_start <= 0) {
-			/* Free all data blocks and the indirect block itself */
 			ind_bh = sb_bread(sb, le32_to_cpu(oi->i_data[OBSIDIAN_IND_BLOCK]));
 			if (ind_bh) {
 				ind_data = (__le32 *)ind_bh->b_data;
@@ -762,7 +754,6 @@ static void obsidianfs_truncate_partial(struct inode *inode)
 			obsidianfs_free_blocks(inode, le32_to_cpu(oi->i_data[OBSIDIAN_IND_BLOCK]), 1);
 			oi->i_data[OBSIDIAN_IND_BLOCK] = 0;
 		} else if ((unsigned long)ind_start < ptrs) {
-			/* Partial: free entries [ind_start .. ptrs) */
 			bool all_gone = true;
 
 			ind_bh = sb_bread(sb, le32_to_cpu(oi->i_data[OBSIDIAN_IND_BLOCK]));
@@ -784,15 +775,12 @@ static void obsidianfs_truncate_partial(struct inode *inode)
 				oi->i_data[OBSIDIAN_IND_BLOCK] = 0;
 			}
 		}
-		/* ind_start >= ptrs: nothing to free */
 	}
 
-	/* 3. Double-indirect block: covers logical blocks [NDIR+ptrs .. NDIR+ptrs+ptrs²) */
 	if (oi->i_data[OBSIDIAN_DIND_BLOCK]) {
 		long dind_start = (long)first - NDIR_BLOCKS - (long)ptrs;
 
 		if (dind_start <= 0) {
-			/* Free everything under the dind block */
 			dind_bh = sb_bread(sb, le32_to_cpu(oi->i_data[OBSIDIAN_DIND_BLOCK]));
 			if (dind_bh) {
 				dind_data = (__le32 *)dind_bh->b_data;
@@ -814,7 +802,6 @@ static void obsidianfs_truncate_partial(struct inode *inode)
 			obsidianfs_free_blocks(inode, le32_to_cpu(oi->i_data[OBSIDIAN_DIND_BLOCK]), 1);
 			oi->i_data[OBSIDIAN_DIND_BLOCK] = 0;
 		} else if ((unsigned long)dind_start < ptrs * ptrs) {
-			/* Partial: first dind entry to touch */
 			unsigned long di      = dind_start / ptrs;
 			unsigned long di_off  = dind_start % ptrs;
 			bool dind_all_gone    = true;
@@ -831,7 +818,6 @@ static void obsidianfs_truncate_partial(struct inode *inode)
 						continue;
 					}
 					if (i == di && di_off > 0) {
-						/* Partially free this indirect block */
 						bool ind_all_gone = true;
 
 						ind_bh = sb_bread(sb, le32_to_cpu(dind_data[i]));
@@ -855,7 +841,6 @@ static void obsidianfs_truncate_partial(struct inode *inode)
 							dind_all_gone = false;
 						}
 					} else {
-						/* i > di: free entire indirect block */
 						ind_bh = sb_bread(sb, le32_to_cpu(dind_data[i]));
 						if (ind_bh) {
 							ind_data = (__le32 *)ind_bh->b_data;
@@ -876,10 +861,7 @@ static void obsidianfs_truncate_partial(struct inode *inode)
 				oi->i_data[OBSIDIAN_DIND_BLOCK] = 0;
 			}
 		}
-		/* dind_start >= ptrs²: nothing to free */
 	}
-
-	/* Triple-indirect not implemented; large files not truncated partially */
 
 	if (inode->i_size < oi->valid_size)
 		oi->valid_size = inode->i_size;
@@ -1124,10 +1106,6 @@ static int obsidianfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, str
 	struct inode *new_inode = d_inode(new_dentry);
 	int err;
 
-	if (flags & ~RENAME_NOREPLACE) {
-		return -EINVAL;
-	}
-
 	if (new_inode) {
 		if (OBSIDIANFS_INODE(new_inode)->flagsProtected) {
 			pr_err("[ERROR OBSIDIANFS] %s: target file is protected\n", __func__);
@@ -1158,7 +1136,6 @@ static int obsidianfs_rename(struct mnt_idmap *idmap, struct inode *old_dir, str
 
 	err = obsidianfs_add_dir_entry(new_dir, &new_dentry->d_name, old_inode->i_ino);
 	if (err) {
-		/* Best-effort rollback: re-add the old entry to avoid losing the file */
 		obsidianfs_add_dir_entry(old_dir, &old_dentry->d_name, old_inode->i_ino);
 		return err;
 	}

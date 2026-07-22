@@ -21,7 +21,7 @@ struct obsidianfs_inode {
 	__u8	i_flagsProtected;	/* Flag for the file protection */
 	__le32	i_next_inode;		// For the inode chain (CoW)
 	__le32	i_previous_inode;	// For the inode chain (CoW)
-	__u8	i_reserved[11];		/* Reserved — pad to 128 bytes */
+	__u8	i_reserved[11];		/* Reserved pad to 128 bytes */
 };
 
 #ifdef __KERNEL__
@@ -36,7 +36,7 @@ struct obsidianfs_inode {
 typedef unsigned long obsidianfs_fsblk_t;
 
 struct obsidianfs_inode_meta {
-	struct inode  vfs_inode;          /* VFS inode — MUST be first */
+	struct inode  vfs_inode;          /* VFS inode must first */
 	struct mutex  i_lock;             /* protects block allocation and valid_size */
 	rwlock_t      readwritelock;
 	loff_t        valid_size;         /* highest byte written */

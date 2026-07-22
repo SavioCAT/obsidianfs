@@ -4,6 +4,7 @@
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/buffer_head.h>
+#include <linux/blkdev.h>
 #include "cow.h"
 
 struct inode *obsidianfs_cow_inode(struct inode *old_inode, struct dentry *dentry);
@@ -63,7 +64,6 @@ struct inode *obsidianfs_cow_inode(struct inode *old_inode, struct dentry *dentr
 
 	old_oi->i_previous_inode = new_inode->i_ino;
 
-	/* Invalider le dentry pour forcer un re-lookup au prochain accès */
 	d_drop(dentry);
 
 	mark_inode_dirty(old_inode);
@@ -143,14 +143,10 @@ static int obsidianfs_copy_blocks(struct inode *old_inode, struct inode *new_ino
 		unlock_buffer(bh_dst);
 		kunmap_local(src_kaddr);
 		mark_buffer_dirty(bh_dst);
-		err = sync_dirty_buffer(bh_dst);
 		brelse(bh_dst);
 		folio_put(src_folio);
-		if (err) {
-			return err;
-		}
 	}
-	return 0;
+	return sync_blockdev(sb->s_bdev);
 }
 
 static int obsidianfs_max_backup(struct inode *inode) {

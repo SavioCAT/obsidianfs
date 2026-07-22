@@ -1,5 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
-
 #include <linux/fs.h>
 #include <linux/pagemap.h>
 #include <linux/mm.h>
@@ -50,9 +48,7 @@ int obsidian_read_folio(struct file *file, struct folio *folio)
 	return mpage_read_folio(folio, obsidianfs_get_block);
 }
 
-int obsidian_write_begin(const struct kiocb *iocb, struct address_space *mapping,
-			 loff_t pos, unsigned len,
-			 struct folio **foliop, void **fsdata)
+int obsidian_write_begin(const struct kiocb *iocb, struct address_space *mapping, loff_t pos, unsigned len, struct folio **foliop, void **fsdata)
 {
 	return block_write_begin(mapping, pos, len, foliop, obsidianfs_get_block);
 }
@@ -94,8 +90,7 @@ static int obsidian_block_to_path(struct inode *inode, long i_block, int offsets
 	int final = 0;
 
 	if (i_block < 0) {
-		pr_err("[ERROR OBSIDIANFS] %s: negative block %ld\n",
-		       __func__, i_block);
+		pr_err("[ERROR OBSIDIANFS] %s: negative block %ld\n", __func__, i_block);
 	} else if (i_block < direct_blocks) {
 		offsets[n++] = i_block;
 		final = direct_blocks;
@@ -118,8 +113,9 @@ static int obsidian_block_to_path(struct inode *inode, long i_block, int offsets
 		pr_err("[ERROR OBSIDIANFS] %s: block %ld out of range\n", __func__, i_block);
 	}
 
-	if (boundary)
+	if (boundary) {
 		*boundary = final - 1 - (i_block & (ptrs - 1));
+	}
 
 	return n;
 }
@@ -172,14 +168,17 @@ static unsigned long obsidianfs_find_near(struct inode *inode, Indirect *ind)
 	unsigned long bg_start;
 	unsigned long colour;
 
-	for (p = ind->p - 1; p >= start; p--)
-		if (*p)
+	for (p = ind->p - 1; p >= start; p--) {
+		if (*p) {
 			return le32_to_cpu(*p);
+		}
+	}
+		
 
-	if (ind->bh)
+	if (ind->bh) {
 		return ind->bh->b_blocknr;
+	}
 
-	/* TODO: use BLOCKS_PER_GROUP once s_fs_info is populated */
 	bg_start = obsidianfs_group_first_block_no(inode->i_sb, oi->i_block_group);
 	colour   = current->pid % 16;
 	return bg_start + colour;
@@ -187,13 +186,11 @@ static unsigned long obsidianfs_find_near(struct inode *inode, Indirect *ind)
 
 static unsigned long obsidianfs_find_goal(struct inode *inode, long block, Indirect *partial)
 {
-	struct obsidianfs_block_alloc_info *block_i =
-		OBSIDIANFS_INODE(inode)->i_block_alloc_info;
+	struct obsidianfs_block_alloc_info *block_i = OBSIDIANFS_INODE(inode)->i_block_alloc_info;
 
-	if (block_i &&
-	    block == block_i->last_alloc_logical_block + 1 &&
-	    block_i->last_alloc_physical_block != 0)
+	if (block_i && block == block_i->last_alloc_logical_block + 1 && block_i->last_alloc_physical_block != 0) {
 		return block_i->last_alloc_physical_block + 1;
+	}
 
 	return obsidianfs_find_near(inode, partial);
 }
@@ -205,13 +202,14 @@ void obsidianfs_init_block_alloc_info(struct inode *inode)
 	struct obsidianfs_reserve_window_node *rsv;
 
 	block_i = kmalloc(sizeof(*block_i), GFP_NOFS);
-	if (!block_i)
+	if (!block_i) {
 		return;
+	}
+		
 
 	rsv = &block_i->rsv_window_node;
 	rsv->rsv_window._rsv_start = 0;
 	rsv->rsv_window._rsv_end   = 0;
-	/* reservations disabled until mount options are wired up */
 	rsv->rsv_goal_size  = 0;
 	rsv->rsv_alloc_hit  = 0;
 	block_i->last_alloc_logical_block  = 0;
@@ -251,8 +249,7 @@ static int obsidianfs_alloc_branch(struct inode *inode, int indirect_blks, int *
 	obsidianfs_fsblk_t new_blocks[4];
 	obsidianfs_fsblk_t current_block;
 
-	num = obsidianfs_alloc_blocks(inode, goal, indirect_blks, *blks,
-				      new_blocks, &err);
+	num = obsidianfs_alloc_blocks(inode, goal, indirect_blks, *blks, new_blocks, &err);
 	if (err)
 		return err;
 
@@ -381,7 +378,7 @@ static int obsidianfs_alloc_blocks(struct inode *inode, obsidianfs_fsblk_t goal,
 		}
 	}
 
-	/* --- Allocate 'blks' contiguous data blocks — two-pass search around goal --- */
+	/* Allocate 'blks' contiguous data blocks two-pass search around goal */
 	{
 		bool found = false;
 		int pass;
@@ -566,11 +563,6 @@ static void obsidianfs_splice_branch(struct inode *inode, long block, Indirect *
 			le32_to_cpu(where[num].key) + blks - 1;
 	}
 
-	/*
-	 * Comptabiliser les blocs physiques fraîchement alloués : num blocs
-	 * de métadonnées (indirects) + blks blocs de données. i_blocks est en
-	 * secteurs de 512 octets, d'où la conversion depuis la taille de bloc.
-	 */
 	inode->i_blocks += (unsigned long)(num + blks) *
 			   (inode->i_sb->s_blocksize >> 9);
 
